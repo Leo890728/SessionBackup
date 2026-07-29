@@ -1,0 +1,287 @@
+{
+  "name": "session-backup",
+  "displayName": "AI Session Backup",
+  "description": "以 append-only 格式備份並跨電腦合併 Claude Code 與 Codex session",
+  "version": "0.3.0",
+  "publisher": "lin24362525",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Leo890728/SessionBackup.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "sessionBackup.backupNow",
+        "title": "Session Backup: 立即備份"
+      },
+      {
+        "command": "sessionBackup.sync",
+        "title": "Session Backup: 同步並合併其他電腦紀錄..."
+      },
+      {
+        "command": "sessionBackup.manageProjects",
+        "title": "Session Backup: 管理 Claude 專案對應..."
+      },
+      {
+        "command": "sessionBackup.manageSelection",
+        "title": "Session Backup: 管理要備份的對話..."
+      },
+      {
+        "command": "sessionBackup.includeSession",
+        "title": "加入備份",
+        "icon": "$(check)"
+      },
+      {
+        "command": "sessionBackup.excludeSession",
+        "title": "移出備份",
+        "icon": "$(circle-slash)"
+      },
+      {
+        "command": "sessionBackup.setupRemote",
+        "title": "Session Backup: 連接 GitHub"
+      },
+      {
+        "command": "sessionBackup.publishGithub",
+        "title": "Session Backup: 備份至 GitHub"
+      },
+      {
+        "command": "sessionBackup.refreshRepository",
+        "title": "重新整理 GitHub 備份狀態",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "sessionBackup.resolveConflict",
+        "title": "解決 Session 衝突..."
+      },
+      {
+        "command": "sessionBackup.openRepo",
+        "title": "Session Backup: 開啟本地備份儲存庫資料夾"
+      },
+      {
+        "command": "sessionBackup.showLog",
+        "title": "Session Backup: 顯示記錄"
+      },
+      {
+        "command": "sessionBackup.refreshSessions",
+        "title": "重新整理",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "sessionBackup.previewSession",
+        "title": "預覽對話"
+      },
+      {
+        "command": "sessionBackup.exportSession",
+        "title": "匯出 Markdown"
+      },
+      {
+        "command": "sessionBackup.openSessionFile",
+        "title": "開啟原始 JSONL"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sessionBackup",
+          "title": "Session Backup",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "sessionBackup": [
+        {
+          "id": "sessionBackup.repository",
+          "name": "GitHub Backup"
+        },
+        {
+          "id": "sessionBackup.sessions",
+          "name": "Sessions"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "sessionBackup.refreshRepository",
+          "when": "view == sessionBackup.repository",
+          "group": "navigation"
+        },
+        {
+          "command": "sessionBackup.refreshSessions",
+          "when": "view == sessionBackup.sessions",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "sessionBackup.exportSession",
+          "when": "view == sessionBackup.sessions && viewItem =~ /^session/",
+          "group": "2_export@1"
+        },
+        {
+          "command": "sessionBackup.openSessionFile",
+          "when": "view == sessionBackup.sessions && viewItem =~ /^session/",
+          "group": "2_export@2"
+        },
+        {
+          "command": "sessionBackup.includeSession",
+          "when": "view == sessionBackup.sessions && viewItem =~ /Unselected$/",
+          "group": "1_selection@1"
+        },
+        {
+          "command": "sessionBackup.excludeSession",
+          "when": "view == sessionBackup.sessions && viewItem =~ /Selected$/",
+          "group": "1_selection@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "sessionBackup.refreshRepository",
+          "when": "false"
+        },
+        {
+          "command": "sessionBackup.resolveConflict",
+          "when": "false"
+        },
+        {
+          "command": "sessionBackup.refreshSessions",
+          "when": "false"
+        },
+        {
+          "command": "sessionBackup.previewSession",
+          "when": "false"
+        },
+        {
+          "command": "sessionBackup.exportSession",
+          "when": "false"
+        },
+        {
+          "command": "sessionBackup.openSessionFile",
+          "when": "false"
+        },
+        {
+          "command": "sessionBackup.includeSession",
+          "when": "false"
+        },
+        {
+          "command": "sessionBackup.excludeSession",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Session Backup",
+      "properties": {
+        "sessionBackup.repoPath": {
+          "type": "string",
+          "default": "",
+          "description": "本地備份 Git 儲存庫路徑，留空表示 ~/.session-backup-v2"
+        },
+        "sessionBackup.repoName": {
+          "type": "string",
+          "default": "agent-session-backup",
+          "description": "在 GitHub 上建立的私人儲存庫名稱"
+        },
+        "sessionBackup.machineId": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "此電腦在同步儲存庫中的識別名稱。留空時自動使用「主機名稱 + VS Code 安裝識別碼短雜湊」，同名主機也不會撞。此設定不會被 Settings Sync 同步到其他電腦"
+        },
+        "sessionBackup.autoBackupMinutes": {
+          "type": "number",
+          "default": 30,
+          "description": "自動備份間隔（分鐘），0 表示停用"
+        },
+        "sessionBackup.backupOnStartup": {
+          "type": "boolean",
+          "default": false,
+          "description": "VSCode 啟動時自動備份一次"
+        },
+        "sessionBackup.maxFileSizeMB": {
+          "type": "number",
+          "default": 95,
+          "description": "單一檔案大小上限（MB），超過者略過（GitHub 硬限制為 100 MB）"
+        },
+        "sessionBackup.secretScan": {
+          "type": "boolean",
+          "default": true,
+          "description": "commit 前掃描變更檔案中的疑似 API 金鑰/憑證"
+        },
+        "sessionBackup.selectedSessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "要備份的對話（白名單，建議從 Sessions 側欄的核取方塊管理）。規則分三層：`tool:claude`／`tool:codex`（整個工具，含之後新增的對話）、`claudeProject:<projects 目錄名>`（整個 Claude 專案，含之後新增的對話）、`session:<tool>:<sessionId>`（單一對話）。前綴 `-` 代表排除，例如 `-session:codex:019f44…`；判定時越具體的規則越優先（session > claudeProject > tool），所以可以勾選整個專案後再單獨排除其中一個對話。沒有任何規則涵蓋的對話不會備份、不觸發變更偵測，同步時也不會從其他電腦匯入"
+        },
+        "sessionBackup.ignoredSessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "deprecationMessage": "已由 sessionBackup.selectedSessions 取代（備份改為選擇制），啟動時會自動轉換並移除此設定",
+          "description": "（已淘汰）永久忽略備份的 session"
+        },
+        "sessionBackup.sources": {
+          "type": "array",
+          "description": "Claude/Codex 根目錄。綠地格式只讀取 projects、sessions、archived_sessions 中的 JSONL",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "path"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            }
+          },
+          "default": [
+            {
+              "name": "claude",
+              "path": "~/.claude"
+            },
+            {
+              "name": "codex",
+              "path": "~/.codex"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "test": "npm run compile && node --test out/*.test.js",
+    "backup:local": "npm run compile && node out/rebuildLocal.js",
+    "watch": "tsc -w -p ./",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "prettier": "3.9.5",
+    "typescript": "^5.4.0"
+  }
+}
