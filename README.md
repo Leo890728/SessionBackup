@@ -76,7 +76,9 @@ Claude Code 以本機專案路徑區分 session。擴充功能不把 A 電腦的
 - 本機對應保存於 VS Code extension global storage 的 `project-mappings.json`，不會 commit 到共享備份庫。
 - 共享 manifest 只保存 `projectId`、顯示名稱、remote hash 與 repository-relative path，不保存本機絕對路徑或 Claude 的路徑 bucket。
 
-找不到對應時可選擇「使用目前工作區」、「選擇本機資料夾」或「跳過」。之後可執行 **Session Backup: 管理 Claude 專案對應...** 重新定位或移除對應。
+找不到對應時同步不中斷也不詢問：該專案在 **Sessions** 側邊欄顯示成 ☁ 待對應節點，點擊才進入「使用目前工作區 / 選擇本機資料夾」，指定後自動再同步一次。之後可執行 **Session Backup: 管理 Claude 專案對應...** 重新定位或移除對應。
+
+備份當下 checkout 若還沒有 `remote.origin.url`，`projectId` 會退回以絕對路徑計算的 `local-<hash>`，跨機必然配不上，只能手動指定一次。
 
 共享 store 仍保存未修改的原始 JSONL；JSONL 本身可能含來源電腦的 `cwd`。匯入 B 時只改變 materialize 位置，不全文取代對話或工具輸出中的路徑。
 
@@ -147,6 +149,7 @@ Codex 以 `session_meta.payload.cwd` 決定 session 屬於哪個工作目錄—�
 | `Session Backup: 同步並合併其他電腦紀錄...` | 備份本機、取得遠端並以 no-delete 規則合併 |
 | `Session Backup: 管理 Claude 專案對應...` | 重新定位、開啟或移除本機 projectId 對應 |
 | `Session Backup: 管理要備份的對話...` | 檢視選取規則，勾選即可刪除 |
+| `Session Backup: 還原遮蔽的金鑰...` | 把遮蔽的原文寫回本機對話紀錄 |
 | `Session Backup: 設定 GitHub 私人儲存庫` | 自動建立或連結私人 repo |
 | `Session Backup: 開啟本地備份儲存庫資料夾` | 開啟 `~/.session-backup-v2` |
 | `Session Backup: 顯示記錄` | 顯示輸出面板 |

@@ -39,7 +39,7 @@ code --install-extension session-backup-0.3.0.vsix --force
 
 這個設定是 machine-scoped,**不會被 Settings Sync 同步到其他電腦**。想自訂就直接填,填了以自訂值為準。
 
-⚠️ 兩台撞名的後果不是「合併在一起」而是**完全不同步**:同步時會把 machineId 等於自己的 manifest 過濾掉,所以兩台都會忽略對方,同時互相覆寫同一份 manifest,產生無止盡的 commit 來回。
+⚠️ 兩台撞名的後果不是「合併在一起」而是**完全不同步**:同步時會把 machineId 與自己相同的 manifest 過濾掉,所以兩台都會忽略對方,同時互相覆寫同一份 manifest,產生無止盡的 commit 來回。
 
 ### 3. 選擇要備份的對話
 
@@ -75,19 +75,17 @@ code --install-extension session-backup-0.3.0.vsix --force
 1. 安裝擴充功能,設定**不同的** `machineId`
 2. 執行 **Session Backup: 連接 GitHub**,選擇同一個備份庫
 3. 執行 **Session Backup: 同步並合併其他電腦紀錄...**
-4. 在 **Sessions** 側欄勾選這台電腦本機**自己產生**的對話
+4. 在 **Sessions** 側邊欄勾選這台電腦本機**自己產生**的對話
 
 第 4 步不影響第 3 步:從備份庫匯入的對話會自動變成已勾選,所以第一台電腦備份過的內容在這台不用重勾。要勾的只有這台電腦自己新開、還沒上傳過的對話。
 
 ⚠️ 選取規則存在**使用者設定**(`sessionBackup.selectedSessions`),不進備份庫,但**會被 Settings Sync 同步到其他電腦** —— 這點和 machine-scoped 的 `machineId` 不同。影響最大的是 `tool:claude` / `tool:codex` 這種整個工具的規則:它一旦同步過去,新電腦裝好擴充功能就會直接開始備份該工具的全部對話,不會再問你。要讓每台電腦各自決定,在 `settingsSync.ignoredSettings` 加入 `sessionBackup.selectedSessions`,或改用專案、單一對話層級的規則。
 
-Claude Code 以本機專案路徑區分 session,兩台電腦的 checkout 路徑通常不同。同步時遇到本機還沒有對應的專案會請你選擇:
+Claude Code 以本機專案路徑區分 session,兩台電腦的 checkout 路徑通常不同(A 在 `C:\`、B 在 `D:\`)。Git 專案靠正規化的 remote hash 自動配對,通常不用管。
 
-- **使用目前工作區**
-- **選擇本機資料夾**
-- **跳過**
+配不上的專案**不會跳視窗打斷同步**,而是在 **Sessions** 側邊欄的 Claude Code 底下顯示成 ☁ **待對應**節點,標示「N 個對話 · 待對應」與來源電腦。點它選擇這個專案在本機的位置(**使用目前工作區** 或 **選擇本機資料夾**),對應完成後會自動再同步一次,那些對話就會落地成一般的專案節點。之後想改用 **Session Backup: 管理 Claude 專案對應...** 重新定位。
 
-Git 專案靠正規化的 remote hash 自動配對,通常不用手動選。之後可用 **Session Backup: 管理 Claude 專案對應...** 重新定位。
+> 什麼情況會配不上?最常見的是備份當下那個 checkout **還沒有 `remote.origin.url`**(先本地 `git init`、之後才推上 GitHub)。這時專案身分會退回以絕對路徑計算的 `local-<hash>`,換一台電腦既對不上 id 也沒有 remote hash 可比,只能手動指一次。
 
 ## 日常運作
 
@@ -108,6 +106,7 @@ Git 專案靠正規化的 remote hash 自動配對,通常不用手動選。之�
 | 兩邊從同一點分叉 | 記為衝突,顯示在側邊欄 |
 | 本機沒有這個對話 | 匯入,並自動納入選取 |
 | 本機有但**未勾選** | 略過,不覆寫也不匯入 |
+| Claude 專案在本機解不出位置 | 略過,在 Sessions 側邊欄顯示成 ☁ 待對應 |
 
 ## 讀懂側邊欄
 
@@ -133,6 +132,8 @@ Claude Code 依專案分組,Codex 依日期分組。Codex 子代理 thread 不�
 | ⃠ | 未選取 | 沒有勾選,備份與同步都會跳過 |
 | ⚠ | 跳過(過大) | 超過 `maxFileSizeMB` |
 
+Claude Code 底下另有 ☁ **待對應**節點:其他電腦備份過、但本機找不到位置的專案。它沒有核取方塊(還沒有本機檔案可勾),點一下指定資料夾即可,見[加入第二台電腦](#加入第二台電腦)。
+
 右鍵可匯出 Markdown、開啟原始 JSONL、加入或移出備份。
 
 ## 處理衝突
@@ -147,16 +148,36 @@ Claude Code 依專案分組,Codex 依日期分組。Codex 子代理 thread 不�
 
 ## 金鑰掃描
 
-`sessionBackup.secretScan` 預設開啟,commit 前掃描常見的 Anthropic、OpenAI、GitHub、AWS、Slack、Google 金鑰與私鑰標頭。只掃這次會**新寫入** store 的內容。
+`sessionBackup.secretScan` 預設開啟,commit 前掃描 Anthropic、OpenAI、GitHub、GitLab、AWS、Slack、Google、Stripe、npm、PyPI、Hugging Face、Groq、Notion、SendGrid、JWT、連線字串密碼與私鑰標頭。只掃這次會**新寫入** store 的內容。
+
+規則一律是**前綴錨定**的高精確度樣式,不做熵值啟發式 —— 對話裡高熵字串(檔案 sha、base64、UUID)滿地都是,而遮蔽會改寫你的原始檔,誤判的代價是毀掉內容。寧可漏抓自訂格式也不錯抓。
 
 命中時可選:
 
+- **遮蔽後備份** — 把金鑰就地換成 `<SECRET:openai:5e70266c>` 這樣的標籤後照常備份。**會改寫本機原始檔**
 - **跳過此次** — 這次不備份這些 session
 - **取消選取** — 在 `sessionBackup.selectedSessions` 寫入排除規則。之後不備份、不觸發變更偵測,多機同步時也不會從其他電腦匯入回本機。已上傳的舊備份不會被刪除
 - **仍要全部備份**
 - **取消此次備份**
 
-想恢復就在 Sessions 側欄重新勾選,或用 **Session Backup: 管理要備份的對話...** 刪掉那條排除規則。
+想恢復就在 Sessions 側邊欄重新勾選,或用 **Session Backup: 管理要備份的對話...** 刪掉那條排除規則。
+
+### 遮蔽
+
+標籤是**原文的雜湊**(`<SECRET:<類別>:<sha256 前 8 碼>>`),不是流水號。這是硬需求:流水號會讓兩台電腦依各自的掃描順序編出不同號碼,同一段對話遮出來的位元組就不同,而備份庫是 content-addressed 又靠逐行比對合併 —— 結果是每個含金鑰的 session 都變成**永久假衝突**。內容衍生的標籤則到處都一樣,兩台各自遮完會收斂成同一份。
+
+遮蔽是**就地改寫原始檔**,不是「只存遮蔽版進備份庫」。後者會讓磁碟與 store 的位元組不一致,得同時改雜湊鏈、側邊欄的 mtime+size 判斷、與合併層的逐行比對;改原始檔則這三處原樣運作。語意上也更誠實 —— 那把金鑰本來就不該留在對話紀錄裡。
+
+安全措施:
+
+- 只在你**明確點下去**時執行,自動備份不會自己遮
+- 兩分鐘內有寫入的檔案跳過(agent 可能還在 append,中途重寫會壞資料),下次備份再處理
+- 先寫暫存檔再 rename,中途失敗原檔完整
+- 原文先存進保險庫才動檔案
+
+原文存在擴充功能 globalStorage 的 `secret-vault.json`,**不進備份庫、不進 Settings Sync**。刻意不加密:原文本來就以明文躺在同一台機器的 `~/.claude` 裡,本機多存一份不增加曝露面;放進備份庫則等於把金鑰推上 GitHub,正是遮蔽要避免的事。所以**其他電腦看到的永遠是標籤** —— 一把 API key 不該因為你換台電腦就自動複製過去。
+
+要拿回原文,執行 **Session Backup: 還原遮蔽的金鑰...**,選檔案後確認即可。但先想清楚:金鑰一旦進過紀錄就該撤銷換發,還原它通常不是你要的。
 
 ## 命令
 
@@ -168,6 +189,7 @@ Claude Code 依專案分組,Codex 依日期分組。Codex 子代理 thread 不�
 | `Session Backup: 同步並合併其他電腦紀錄...` | 備份本機、拉遠端並以 no-delete 規則合併 |
 | `Session Backup: 管理 Claude 專案對應...` | 重新定位、開啟或移除專案對應 |
 | `Session Backup: 管理要備份的對話...` | 檢視選取規則,勾選即可刪除 |
+| `Session Backup: 還原遮蔽的金鑰...` | 把遮蔽的原文寫回本機對話紀錄 |
 | `Session Backup: 開啟本地備份儲存庫資料夾` | 開啟備份庫 |
 | `Session Backup: 顯示記錄` | 顯示輸出面板 |
 
@@ -182,7 +204,7 @@ Claude Code 依專案分組,Codex 依日期分組。Codex 子代理 thread 不�
 | `sessionBackup.backupOnStartup` | `false` | 啟動時同步一次 |
 | `sessionBackup.maxFileSizeMB` | `95` | 單檔上限(GitHub 硬限制 100 MB) |
 | `sessionBackup.secretScan` | `true` | commit 前掃描疑似金鑰 |
-| `sessionBackup.selectedSessions` | `[]` | 要備份的對話(白名單),建議從側欄核取方塊管理。規則:`tool:<tool>`、`claudeProject:<目錄名>`、`session:<tool>:<id>`,前綴 `-` 為排除。**會被 Settings Sync 同步** |
+| `sessionBackup.selectedSessions` | `[]` | 要備份的對話(白名單),建議從側邊欄核取方塊管理。規則:`tool:<tool>`、`claudeProject:<目錄名>`、`session:<tool>:<id>`,前綴 `-` 為排除。**會被 Settings Sync 同步** |
 | `sessionBackup.sources` | `~/.claude`、`~/.codex` | 掃描根目錄 |
 
 ## 常見問題
@@ -191,7 +213,7 @@ Claude Code 依專案分組,Codex 依日期分組。Codex 子代理 thread 不�
 
 因為那個對話上有一條**更具體**的排除規則,而它贏過專案層級的勾選。通常是先前在它身上取消過勾選,或金鑰掃描時選了「取消選取」,寫進了 `-session:<tool>:<id>`。
 
-直接在側欄重新勾選那個對話即可,或執行 **Session Backup: 管理要備份的對話...**,找到開頭是「排除:」的那條規則刪掉。
+直接在側邊欄重新勾選那個對話即可,或執行 **Session Backup: 管理要備份的對話...**,找到開頭是「排除:」的那條規則刪掉。
 
 ### 取消勾選會刪掉 GitHub 上已經備份的內容嗎?
 
@@ -209,7 +231,7 @@ Claude Code 依專案分組,Codex 依日期分組。Codex 子代理 thread 不�
 
 revision 路徑是 `store/<tool>/<session-id>/<sha256>.jsonl`。若同一份內容出現在兩個檔案位置 —— 最典型的是 Codex 把同一個 rollout 同時放在 `sessions/` 與 `archived_sessions/` —— 兩筆的 tool、id、hash 全同,指向同一個 revision,所以**只寫一次檔案但記兩筆 manifest**,數字就會差 1。
 
-這是 content-addressed 去重的正常結果,不是漏備份。兩個路徑都還原得回來。
+這是 content-addressed 去重的正常結果,不是漏備份,兩個路徑都能還原回來。
 
 ### 「連接 GitHub」沒讓我選 repo,直接叫我命名?
 

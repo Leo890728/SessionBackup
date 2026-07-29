@@ -31,11 +31,19 @@ import {
   STATUS_DISPLAY,
   StatusLookup,
 } from "./sessionStatus";
+import { ProjectMappingRegistry } from "./projectMapping";
 import {
   machineIdFromConfig,
   manifestRelativePath,
+  ProjectRef,
   readManifest,
+  readMachineManifests,
 } from "./sessionStore";
+import {
+  aggregateRemoteProjects,
+  filterUnmapped,
+  RemoteProject,
+} from "./unmappedProjects";
 
 export type TreeNode =
   | { kind: "root"; tool: Tool; label: string; dir: string }
@@ -47,20 +55,27 @@ export type TreeNode =
       status: SessionSyncStatus;
       claudeProjectDir?: string;
       subs?: TreeNode[];
-    };
+    }
+  /** 遠端備份過、本機還沒有對應資料夾的 Claude 專案；點一下建立映射。 */
+  | { kind: "unmappedProject"; project: ProjectRef; count: number; machines: string[] };
 
 export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private _onDidChangeTreeData = new vscode.EventEmitter<TreeNode | undefined>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
   private lookup?: Promise<StatusLookup>;
+  private unmapped?: Promise<RemoteProject[]>;
   /** getTreeItem 是同步的，選取狀態必須先備妥。 */
   private selection = new SelectionSet(getConfig().selectedSessions);
 
-  constructor(private readonly extensionUri: vscode.Uri) {}
+  constructor(
+    private readonly extensionUri: vscode.Uri,
+    private readonly projects: ProjectMappingRegistry
+  ) {}
 
   refresh(): void {
     clearSessionCache();
     this.lookup = undefined;
+    this.unmapped = undefined;
     this.selection = new SelectionSet(getConfig().selectedSessions);
     this._onDidChangeTreeData.fire(undefined);
   }
@@ -68,6 +83,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   /** 只重讀選取設定並重畫，不清掉標題快取（勾選 checkbox 的路徑）。 */
   reloadSelection(): void {
     this.lookup = undefined;
+    this.unmapped = undefined;
     this.selection = new SelectionSet(getConfig().selectedSessions);
     this._onDidChangeTreeData.fire(undefined);
   }
@@ -88,6 +104,34 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       })();
     }
     return this.lookup;
+  }
+
+  /**
+   * 遠端 manifest 提到、本機解不出位置的 Claude 專案，per-refresh 快取。
+   * 判斷交給 ProjectMappingRegistry.isMapped，與同步時的行為保持一致。
+   */
+  private getUnmappedProjects(): Promise<RemoteProject[]> {
+    if (!this.unmapped) {
+      const selection = this.selection;
+      this.unmapped = (async () => {
+        try {
+          const cfg = getConfig();
+          const manifests = await readMachineManifests(cfg.repoPath);
+          const remote = aggregateRemoteProjects(
+            manifests,
+            machineIdFromConfig(cfg),
+            selection
+          );
+          return await filterUnmapped(remote, (project) =>
+            this.projects.isMapped(project)
+          );
+        } catch {
+          // 備份庫還沒建立或讀不到：側欄照常顯示本機內容即可。
+          return [];
+        }
+      })();
+    }
+    return this.unmapped;
   }
 
   getTreeItem(n: TreeNode): vscode.TreeItem {
@@ -184,6 +228,31 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         };
         return item;
       }
+      case "unmappedProject": {
+        const item = new vscode.TreeItem(
+          n.project.displayName,
+          vscode.TreeItemCollapsibleState.None
+        );
+        item.id = `unmapped:${n.project.id}`;
+        item.description = `${n.count} 個對話 · 待對應`;
+        item.tooltip =
+          `${n.project.displayName}\n\n` +
+          `其他電腦（${n.machines.join("、")}）備份過這個專案的 ${n.count} 個對話，` +
+          "但本機找不到對應的資料夾。\n\n" +
+          "點一下選擇這個專案在本機的位置，之後就會自動同步。";
+        // 沒有 checkboxState：還沒有本機檔案可勾，對應完才會長成一般的專案節點。
+        item.iconPath = new vscode.ThemeIcon(
+          "cloud",
+          new vscode.ThemeColor("descriptionForeground")
+        );
+        item.contextValue = "unmappedProject";
+        item.command = {
+          command: "sessionBackup.mapProject",
+          title: "對應到本機資料夾",
+          arguments: [n],
+        };
+        return item;
+      }
     }
   }
 
@@ -191,7 +260,12 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     if (!el) {
       const dirs = toolDirs();
       const roots: TreeNode[] = [];
-      if (fs.existsSync(path.join(dirs.claude, "projects"))) {
+      // 全新的電腦可能還沒有 projects/，但備份庫已經有別台的 Claude 專案要對應，
+      // 這時仍要顯示 Claude Code 節點，否則待對應的專案無處可點。
+      if (
+        fs.existsSync(path.join(dirs.claude, "projects")) ||
+        (await this.getUnmappedProjects()).length > 0
+      ) {
         roots.push({
           kind: "root",
           tool: "claude",
@@ -205,12 +279,25 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       return roots;
     }
     if (el.kind === "root" && el.tool === "claude") {
-      const projects = await listClaudeProjects(path.join(el.dir, "projects"));
-      return projects.map((project) => ({
+      const [projects, unmapped] = await Promise.all([
+        listClaudeProjects(path.join(el.dir, "projects")),
+        this.getUnmappedProjects(),
+      ]);
+      const nodes: TreeNode[] = projects.map((project) => ({
         kind: "claudeProject",
         project,
         projectDir: path.basename(project.dir),
       }));
+      // 待對應的排在本機專案之後：它們不是本機內容，是還沒落地的備份。
+      for (const entry of unmapped) {
+        nodes.push({
+          kind: "unmappedProject",
+          project: entry.project,
+          count: entry.count,
+          machines: entry.machines,
+        });
+      }
+      return nodes;
     }
     if (el.kind === "root" && el.tool === "codex") {
       return this.buildCodexDateNodes(el.dir);
@@ -246,6 +333,10 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
   /** 勾選/取消勾選（checkbox 與右鍵指令共用）。 */
   async setSelected(node: TreeNode, selected: boolean): Promise<void> {
+    if (node.kind === "unmappedProject") {
+      // 本機還沒有檔案，沒有可套用的選取規則；對應完成後才會出現一般的專案節點。
+      return;
+    }
     if (node.kind === "codexDate") {
       // 日期只是顯示用的分組，沒有對應的範圍規則，逐一套用到當天的 sessions。
       const targets = flattenSessions(node.sessions).map(codexTarget);
@@ -318,8 +409,10 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   }
 }
 
-/** 節點對應的選取規則（codexDate 沒有範圍規則，不會走到這裡）。 */
-export function ruleFor(node: Exclude<TreeNode, { kind: "codexDate" }>): {
+/** 節點對應的選取規則（codexDate 與 unmappedProject 沒有範圍規則，不會走到這裡）。 */
+export function ruleFor(
+  node: Exclude<TreeNode, { kind: "codexDate" | "unmappedProject" }>
+): {
   key: string;
   target: SelectionTarget;
   level: SelectionLevel;

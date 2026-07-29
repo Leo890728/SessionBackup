@@ -39,6 +39,11 @@
         "title": "Session Backup: 管理要備份的對話..."
       },
       {
+        "command": "sessionBackup.mapProject",
+        "title": "對應到本機資料夾",
+        "icon": "$(link)"
+      },
+      {
         "command": "sessionBackup.includeSession",
         "title": "加入備份",
         "icon": "$(check)"
@@ -68,6 +73,10 @@
       {
         "command": "sessionBackup.openRepo",
         "title": "Session Backup: 開啟本地備份儲存庫資料夾"
+      },
+      {
+        "command": "sessionBackup.restoreSecrets",
+        "title": "Session Backup: 還原遮蔽的金鑰..."
       },
       {
         "command": "sessionBackup.showLog",
@@ -145,6 +154,16 @@
           "command": "sessionBackup.excludeSession",
           "when": "view == sessionBackup.sessions && viewItem =~ /Selected$/",
           "group": "1_selection@1"
+        },
+        {
+          "command": "sessionBackup.mapProject",
+          "when": "view == sessionBackup.sessions && viewItem == unmappedProject",
+          "group": "inline"
+        },
+        {
+          "command": "sessionBackup.mapProject",
+          "when": "view == sessionBackup.sessions && viewItem == unmappedProject",
+          "group": "1_selection@1"
         }
       ],
       "commandPalette": [
@@ -178,6 +197,10 @@
         },
         {
           "command": "sessionBackup.excludeSession",
+          "when": "false"
+        },
+        {
+          "command": "sessionBackup.mapProject",
           "when": "false"
         }
       ]

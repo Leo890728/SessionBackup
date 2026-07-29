@@ -8,7 +8,7 @@ import {
 } from "./projectIdentity";
 import type { ProjectRef } from "./sessionStore";
 
-interface LocalProjectMapping extends ProjectRef {
+export interface LocalProjectMapping extends ProjectRef {
   localPath: string;
   claudeProjectDir: string;
   updatedAt: string;
@@ -71,6 +71,14 @@ export class ProjectMappingRegistry {
     const project = detected ?? fallbackProject(resolved);
     await this.remember(project, resolved, encodeClaudeProjectDir(resolved));
     return project;
+  }
+
+  /**
+   * 本機解不解得出這個專案的位置。刻意走 locateProject 的非互動路徑，
+   * 側欄標成「待對應」的才會剛好是同步會跳過的那些。
+   */
+  async isMapped(project: ProjectRef): Promise<boolean> {
+    return (await this.locateProject(project, false)) !== undefined;
   }
 
   async locateProject(

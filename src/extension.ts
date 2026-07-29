@@ -31,6 +31,7 @@ import {
   revisionRelativePath,
   setAutoMachineId,
 } from "./sessionStore";
+import { restoreSessionFile, SecretVault } from "./sessionRedact";
 import { SessionTreeProvider, TreeNode } from "./sessionTree";
 import { rememberKeepLocal, runSync } from "./sync";
 
@@ -44,10 +45,11 @@ export function activate(context: vscode.ExtensionContext): void {
   // 必須在任何備份/同步之前同步設定好，之後 machineIdFromConfig 才拿得到自動值。
   setAutoMachineId(deriveMachineId(os.hostname(), vscode.env.machineId));
   void migrateMachineIdentity(context, out);
-  const tree = new SessionTreeProvider(context.extensionUri);
-  void migrateToSelection(context, out, tree);
   const projects = new ProjectMappingRegistry(context.globalStorageUri.fsPath);
+  const tree = new SessionTreeProvider(context.extensionUri, projects);
+  void migrateToSelection(context, out, tree);
   const conflicts = new ConflictRegistry(context.globalStorageUri.fsPath);
+  const vault = new SecretVault(context.globalStorageUri.fsPath);
   const repository = new RepositoryTreeProvider(out, projects, conflicts, () =>
     tree.refresh()
   );
@@ -65,7 +67,7 @@ export function activate(context: vscode.ExtensionContext): void {
     statusItem,
     repository,
     vscode.commands.registerCommand("sessionBackup.backupNow", () =>
-      backupNow(context, out, "manual", projects, repository, tree)
+      backupNow(context, out, "manual", projects, repository, tree, vault)
     ),
     vscode.commands.registerCommand("sessionBackup.sync", async () => {
       try {
@@ -74,7 +76,7 @@ export function activate(context: vscode.ExtensionContext): void {
             location: vscode.ProgressLocation.Notification,
             title: "Session Backup: 同步並合併其他電腦紀錄...",
           },
-          () => runSync(out, projects, conflicts)
+          () => runSync(out, projects, conflicts, { vault })
         );
         tree.refresh();
         repository.refresh();
@@ -82,13 +84,28 @@ export function activate(context: vscode.ExtensionContext): void {
           `新增 ${summary.added}、更新 ${summary.updated}、保留本機 ${summary.keptLocal}、` +
           `相同 ${summary.identical}、跳過 ${summary.skipped}` +
           (summary.deferred ? `、延後 ${summary.deferred}` : "");
+        const unmappedNote = summary.unmappedProjects.length
+          ? `，另有 ${summary.unmappedProjects.length} 個專案（` +
+            summary.unmappedProjects.map((project) => project.displayName).join("、") +
+            "）在本機找不到位置，對話尚未匯入"
+          : "";
         if (summary.conflicts > 0) {
           const open = await vscode.window.showWarningMessage(
-            `Session Backup: 同步完成（${parts}），有 ${summary.conflicts} 個衝突待處理。`,
+            `Session Backup: 同步完成（${parts}），有 ${summary.conflicts} 個衝突待處理${unmappedNote}。`,
             "開啟側欄處理"
           );
           if (open) {
             await vscode.commands.executeCommand("sessionBackup.repository.focus");
+          }
+        } else if (summary.unmappedProjects.length) {
+          const open = "開啟 Sessions 側欄";
+          const pick = await vscode.window.showWarningMessage(
+            `Session Backup: 同步完成（${parts}）${unmappedNote}。` +
+              "請在 Sessions 側欄點擊 ☁ 待對應的專案指定本機資料夾。",
+            open
+          );
+          if (pick === open) {
+            await vscode.commands.executeCommand("sessionBackup.sessions.focus");
           }
         } else {
           vscode.window.showInformationMessage(`Session Backup: 同步完成（${parts}）`);
@@ -155,6 +172,29 @@ export function activate(context: vscode.ExtensionContext): void {
       projects.manage().catch((err) =>
         vscode.window.showErrorMessage("Session Backup 管理專案對應失敗：" + err.message)
       )
+    ),
+    vscode.commands.registerCommand(
+      "sessionBackup.mapProject",
+      async (node?: TreeNode) => {
+        if (node?.kind !== "unmappedProject") {
+          return;
+        }
+        try {
+          // locateProject 的互動分支就是「使用目前工作區 / 選擇本機資料夾」那組 UI。
+          const mapping = await projects.locateProject(node.project, true);
+          if (!mapping) {
+            return;
+          }
+          out.appendLine(
+            `已對應專案「${node.project.displayName}」到 ${mapping.localPath}，開始同步`
+          );
+          tree.refresh();
+          // 對應好之後立刻同步，使用者不必再自己跑一次命令。
+          await vscode.commands.executeCommand("sessionBackup.sync");
+        } catch (err: any) {
+          vscode.window.showErrorMessage("Session Backup 對應專案失敗：" + err.message);
+        }
+      }
     ),
     vscode.commands.registerCommand(
       "sessionBackup.includeSession",
@@ -231,7 +271,7 @@ export function activate(context: vscode.ExtensionContext): void {
         if (!remote) {
           return;
         }
-        await backupNow(context, out, "manual", projects, repository, tree);
+        await backupNow(context, out, "manual", projects, repository, tree, vault);
       } catch (err: any) {
         vscode.window.showErrorMessage("Session Backup 發布至 GitHub 失敗：" + err.message);
       }
@@ -241,6 +281,58 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     vscode.commands.registerCommand("sessionBackup.openRepo", () => {
       vscode.env.openExternal(vscode.Uri.file(getConfig().repoPath));
+    }),
+    vscode.commands.registerCommand("sessionBackup.restoreSecrets", async () => {
+      try {
+        const entries = await vault.all();
+        if (!entries.length) {
+          vscode.window.showInformationMessage(
+            "Session Backup: 沒有遮蔽紀錄。備份時選擇「遮蔽後備份」才會產生。"
+          );
+          return;
+        }
+        // 以檔案為單位還原：同一個檔案裡的 placeholder 一次全換回去。
+        const byFile = new Map<string, number>();
+        for (const entry of entries) {
+          byFile.set(entry.file, (byFile.get(entry.file) ?? 0) + 1);
+        }
+        const picked = await vscode.window.showQuickPick(
+          [...byFile.entries()].map(([file, count]) => ({
+            label: path.basename(file),
+            description: `${count} 個憑證`,
+            detail: file,
+            file,
+          })),
+          { placeHolder: "選擇要還原金鑰的對話紀錄（會把原文寫回檔案）" }
+        );
+        if (!picked) {
+          return;
+        }
+        const confirm = await vscode.window.showWarningMessage(
+          "還原會把真實金鑰寫回這個對話紀錄。",
+          {
+            modal: true,
+            detail:
+              `${picked.detail}\n\n` +
+              "還原後下次備份掃描會再次命中這個檔案。若該金鑰已外流，正確的做法是撤銷並換發，而不是還原。",
+          },
+          "仍要還原"
+        );
+        if (confirm !== "仍要還原") {
+          return;
+        }
+        const restored = await restoreSessionFile(picked.file, vault);
+        out.appendLine(`已還原 ${picked.file}：${restored} 處`);
+        tree.refresh();
+        repository.refresh(false);
+        vscode.window.showInformationMessage(
+          restored
+            ? `Session Backup: 已還原 ${restored} 處金鑰。`
+            : "Session Backup: 檔案中找不到對應的 placeholder，未做變更。"
+        );
+      } catch (err: any) {
+        vscode.window.showErrorMessage("Session Backup 還原金鑰失敗：" + err.message);
+      }
     }),
     vscode.commands.registerCommand("sessionBackup.showLog", () => out.show()),
     vscode.authentication.onDidChangeSessions((event) => {
@@ -253,7 +345,7 @@ export function activate(context: vscode.ExtensionContext): void {
         tree.reloadSelection();
       }
       if (e.affectsConfiguration("sessionBackup")) {
-        restartTimer(context, out, projects, repository, tree, conflicts);
+        restartTimer(context, out, projects, repository, tree, conflicts, vault);
         repository.reconfigure();
       }
     })
@@ -344,9 +436,9 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
-  restartTimer(context, out, projects, repository, tree, conflicts);
+  restartTimer(context, out, projects, repository, tree, conflicts, vault);
   if (getConfig().backupOnStartup) {
-    void autoSync(context, out, projects, repository, tree, conflicts);
+    void autoSync(context, out, projects, repository, tree, conflicts, vault);
   }
 }
 
@@ -453,6 +545,8 @@ function nodeLabel(node: TreeNode): string {
       return `${node.date} 的對話`;
     case "session":
       return `「${node.info.title}」`;
+    case "unmappedProject":
+      return `待對應專案「${node.project.displayName}」`;
   }
 }
 
@@ -462,7 +556,8 @@ function restartTimer(
   projects: ProjectMappingRegistry,
   repository: RepositoryTreeProvider,
   tree: SessionTreeProvider,
-  conflicts: ConflictRegistry
+  conflicts: ConflictRegistry,
+  vault: SecretVault
 ): void {
   if (timer) {
     clearInterval(timer);
@@ -472,7 +567,7 @@ function restartTimer(
   if (minutes > 0) {
     // 自動排程跑「同步」而非單純備份：先拉遠端合併、再備份上傳，多機幾乎即時同步。
     timer = setInterval(
-      () => void autoSync(context, out, projects, repository, tree, conflicts),
+      () => void autoSync(context, out, projects, repository, tree, conflicts, vault),
       minutes * 60 * 1000
     );
   }
@@ -485,13 +580,22 @@ async function autoSync(
   projects: ProjectMappingRegistry,
   repository: RepositoryTreeProvider,
   tree: SessionTreeProvider,
-  conflicts: ConflictRegistry
+  conflicts: ConflictRegistry,
+  vault: SecretVault
 ): Promise<void> {
   try {
-    const summary = await runSync(out, projects, conflicts, { interactive: false });
+    const summary = await runSync(out, projects, conflicts, {
+      interactive: false,
+      vault,
+    });
     out.appendLine(
       `[${new Date().toLocaleString()}] 自動同步：新增 ${summary.added}、更新 ${summary.updated}、` +
-        `保留本機 ${summary.keptLocal}、衝突 ${summary.conflicts}、延後 ${summary.deferred}`
+        `保留本機 ${summary.keptLocal}、衝突 ${summary.conflicts}、延後 ${summary.deferred}` +
+        (summary.unmappedProjects.length
+          ? `、待對應專案 ${summary.unmappedProjects.length}（` +
+            summary.unmappedProjects.map((project) => project.displayName).join("、") +
+            "，見 Sessions 側欄)"
+          : "")
     );
     await context.globalState.update("lastBackup", Date.now());
     updateStatus(context);
@@ -508,11 +612,12 @@ async function backupNow(
   kind: BackupKind,
   projects: ProjectMappingRegistry,
   repository: RepositoryTreeProvider,
-  tree?: SessionTreeProvider
+  tree?: SessionTreeProvider,
+  vault?: SecretVault
 ): Promise<void> {
   const exec = async () => {
     try {
-      const r = await runBackup(out, kind, projects);
+      const r = await runBackup(out, kind, projects, vault);
       out.appendLine(`[${new Date().toLocaleString()}] ${kind}: ${r.message}`);
       if (r.committed) {
         await context.globalState.update("lastBackup", Date.now());

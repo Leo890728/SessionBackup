@@ -4,6 +4,7 @@ import { Git } from "./git";
 import { getSessionToken, tokenHeader } from "./github";
 import { ProjectMappingRegistry } from "./projectMapping";
 import { applySessionRules } from "./selection";
+import { redactSessions, SecretVault } from "./sessionRedact";
 import { scanSessionsForSecrets, sessionDisplayName } from "./sessionSecretScan";
 import {
   collectLocalSessions,
@@ -25,14 +26,15 @@ let running = false;
 export async function runBackup(
   out: vscode.OutputChannel,
   kind: BackupKind,
-  projects?: ProjectMappingRegistry
+  projects?: ProjectMappingRegistry,
+  vault?: SecretVault
 ): Promise<BackupOutcome> {
   if (running) {
     return { committed: false, pushed: false, message: "另一個備份正在進行中" };
   }
   running = true;
   try {
-    return await doBackup(out, kind, projects);
+    return await doBackup(out, kind, projects, vault);
   } finally {
     running = false;
   }
@@ -41,7 +43,8 @@ export async function runBackup(
 async function doBackup(
   out: vscode.OutputChannel,
   kind: BackupKind,
-  projects?: ProjectMappingRegistry
+  projects?: ProjectMappingRegistry,
+  vault?: SecretVault
 ): Promise<BackupOutcome> {
   const cfg = getConfig();
   if (!cfg.selectedSessions.length) {
@@ -95,6 +98,8 @@ async function doBackup(
             findings.map((finding) => `${finding.kind}（第 ${finding.line} 行）`).join("、")
         )
         .join("\n");
+      const redactLabel =
+        secretMatches.length === 1 ? "遮蔽後備份" : `遮蔽後備份（${secretMatches.length} 個）`;
       const skipLabel =
         secretMatches.length === 1
           ? "跳過此次"
@@ -104,15 +109,46 @@ async function doBackup(
           ? "取消選取此 session"
           : `取消選取這 ${secretMatches.length} 個 sessions`;
       out.appendLine("含疑似機密的 sessions：\n" + detail);
+      // 遮蔽排第一是預設建議；但它會改寫原始檔，所以只在使用者明確點下去時才做，
+      // 其餘選項（跳過／取消選取／仍要全部備份）維持原樣，不遮蔽永遠是可選的。
       const pick = await vscode.window.showWarningMessage(
         `Session Backup: 在 ${secretMatches.length} 個 session 偵測到疑似金鑰/憑證`,
         { modal: kind === "manual", detail },
+        ...(vault ? [redactLabel] : []),
         skipLabel,
         deselectLabel,
         "仍要全部備份",
         "取消此次備份"
       );
-      if (pick === skipLabel) {
+      if (pick === redactLabel && vault) {
+        const outcome = await redactSessions(
+          secretMatches.map((match) => match.session),
+          vault
+        );
+        const updated = new Map(
+          outcome.redacted.map((session) => [session.file, session])
+        );
+        // 使用中或收集後又變動的檔案這輪不動，也不備份——內容還沒遮就上傳等於沒遮。
+        const held = new Set(
+          outcome.skipped.map((entry) => entry.session.file)
+        );
+        sessions = sessions
+          .map((session) => updated.get(session.file) ?? session)
+          .filter((session) => !held.has(session.file));
+        skippedSecretCount = outcome.skipped.length;
+        out.appendLine(
+          `已就地遮蔽 ${outcome.redacted.length} 個 session、共 ${outcome.count} 個憑證；` +
+            `原文保存在 ${vault.storagePath}（不會進備份庫）`
+        );
+        for (const entry of outcome.skipped) {
+          out.appendLine(
+            `未遮蔽 ${entry.session.file}：` +
+              { active: "檔案使用中，下次備份再處理", changed: "掃描後檔案又有變動", "no-match": "重新讀取時已無命中", error: `失敗 — ${entry.error}` }[
+                entry.reason
+              ]
+          );
+        }
+      } else if (pick === skipLabel) {
         const skippedFiles = new Set(secretMatches.map((match) => match.session.file));
         sessions = sessions.filter((session) => !skippedFiles.has(session.file));
         skippedSecretCount = secretMatches.length;

@@ -8,6 +8,7 @@ import { ConflictRecord, ConflictRegistry } from "./conflicts";
 import { getConfig, updateSelectedSessions } from "./config";
 import { ProjectMappingRegistry } from "./projectMapping";
 import { applySessionRules, SelectionSet, SelectionTarget } from "./selection";
+import { SecretVault } from "./sessionRedact";
 import { sessionDisplayName } from "./sessionSecretScan";
 import {
   classifyJsonlFiles,
@@ -15,11 +16,13 @@ import {
   LocalSession,
   machineIdFromConfig,
   ManifestSession,
+  ProjectRef,
   readMachineManifests,
   resolveLocalTarget,
   revisionRelativePath,
   sourceForTool,
 } from "./sessionStore";
+import { ACTIVE_WINDOW_MS } from "./sessionStore";
 import { fileKey, newestRemoteFiles } from "./syncState";
 
 interface ResolutionRecord {
@@ -39,10 +42,9 @@ export interface SyncSummary {
   conflicts: number;
   skipped: number;
   deferred: number;
+  /** 遠端有備份、但本機解不出位置的 Claude 專案；由 Sessions 側欄顯示成待對應節點。 */
+  unmappedProjects: ProjectRef[];
 }
-
-/** 檔案在這段時間內有寫入就視為使用中，不覆寫。 */
-const ACTIVE_WINDOW_MS = 2 * 60 * 1000;
 
 /**
  * 非互動同步：新增與單邊延伸自動處理；分叉只記錄成 ConflictRecord
@@ -52,11 +54,11 @@ export async function runSync(
   out: vscode.OutputChannel,
   projects: ProjectMappingRegistry,
   conflicts: ConflictRegistry,
-  options?: { interactive?: boolean }
+  options?: { interactive?: boolean; vault?: SecretVault }
 ): Promise<SyncSummary> {
   const interactive = options?.interactive ?? true;
   const cfg = getConfig();
-  await runBackup(out, interactive ? "manual" : "auto", projects);
+  await runBackup(out, interactive ? "manual" : "auto", projects, options?.vault);
   const machineId = machineIdFromConfig(cfg);
   const manifests = (await readMachineManifests(cfg.repoPath)).filter(
     (manifest) => manifest.machineId !== machineId
@@ -79,6 +81,8 @@ export async function runSync(
   // 從其他電腦匯入的對話一律納入選取：它本來就已經在備份裡了，
   // 不這麼做的話匯入後反而不會再被這台電腦備份。
   const adopted: SelectionTarget[] = [];
+  // 解不出本機位置的專案：同步不跳視窗打斷，累積起來交給側欄。
+  const unmapped = new Map<string, ProjectRef>();
   const summary: SyncSummary = {
     added: 0,
     updated: 0,
@@ -87,6 +91,7 @@ export async function runSync(
     conflicts: 0,
     skipped: 0,
     deferred: 0,
+    unmappedProjects: [],
   };
 
   for (const candidate of candidates) {
@@ -120,8 +125,12 @@ export async function runSync(
       let relativePath = candidate.session.relativePath;
       let claudeProjectDir: string | undefined;
       if (candidate.session.tool === "claude" && candidate.session.project) {
-        const mapping = await projects.locateProject(candidate.session.project, interactive);
+        // 一律非互動：解不出來就記下來，讓使用者從 Sessions 側欄的待對應節點主動處理。
+        // 專案身分是 local- fallback（備份當下沒有 git remote）時，換一台電腦
+        // 必然對不上 id 也對不上 remote hash，靠 modal 追問只會變成打斷。
+        const mapping = await projects.locateProject(candidate.session.project, false);
         if (!mapping) {
+          unmapped.set(candidate.session.project.id, candidate.session.project);
           summary.skipped++;
           continue;
         }
@@ -235,13 +244,14 @@ export async function runSync(
     });
   }
 
+  summary.unmappedProjects = [...unmapped.values()];
   await conflicts.replaceAll(conflictRecords);
   if (adopted.length) {
     // 必須在下面補跑的備份之前寫回，匯入的對話才會進入本機 manifest。
     await updateSelectedSessions((current) => applySessionRules(current, adopted, true));
   }
   if (summary.added || summary.updated) {
-    await runBackup(out, interactive ? "manual" : "auto", projects);
+    await runBackup(out, interactive ? "manual" : "auto", projects, options?.vault);
   }
   return summary;
 }

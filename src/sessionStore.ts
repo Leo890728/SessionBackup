@@ -9,6 +9,12 @@ import { Tool } from "./sessions";
 
 export const STORE_FORMAT_VERSION = 2;
 
+/**
+ * 檔案在這段時間內有寫入就視為使用中，不覆寫也不改寫。
+ * rollout/session JSONL 是 append-only 的，agent 還在寫的時候動它會壞資料。
+ */
+export const ACTIVE_WINDOW_MS = 2 * 60 * 1000;
+
 export interface ProjectRef {
   id: string;
   displayName: string;
