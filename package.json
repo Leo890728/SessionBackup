@@ -55,11 +55,11 @@
       },
       {
         "command": "sessionBackup.setupRemote",
-        "title": "Session Backup: 連接 GitHub"
+        "title": "Session Backup: 連接備份儲存庫"
       },
       {
         "command": "sessionBackup.publishGithub",
-        "title": "Session Backup: 備份至 GitHub"
+        "title": "Session Backup: 備份至遠端儲存庫"
       },
       {
         "command": "sessionBackup.refreshRepository",

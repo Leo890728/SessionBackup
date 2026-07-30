@@ -120,24 +120,25 @@ export class RepositoryTreeProvider
       return item;
     }
     if (node.kind === "connect") {
-      const item = new vscode.TreeItem("連接 GitHub");
-      item.description = "建立或連結私人儲存庫";
-      item.tooltip = "使用 VS Code 的 GitHub 登入連接 Session Backup";
-      item.iconPath = new vscode.ThemeIcon("github");
+      const item = new vscode.TreeItem("連接備份儲存庫");
+      item.description = "GitHub 個人/組織，或手動 remote URL";
+      item.tooltip =
+        "用 VS Code 的 GitHub 登入建立或連結私人儲存庫；其他 git server 可手動輸入 remote URL";
+      item.iconPath = new vscode.ThemeIcon("repo");
       item.command = {
         command: "sessionBackup.setupRemote",
-        title: "連接 GitHub",
+        title: "連接備份儲存庫",
       };
       return item;
     }
     if (node.kind === "publish") {
-      const item = new vscode.TreeItem("備份至 GitHub");
+      const item = new vscode.TreeItem("備份至遠端儲存庫");
       item.description = remoteLabel(node.remote);
       item.tooltip = "遠端儲存庫尚未有 Session Backup，建立第一份備份並 push";
       item.iconPath = new vscode.ThemeIcon("cloud-upload");
       item.command = {
         command: "sessionBackup.publishGithub",
-        title: "備份至 GitHub",
+        title: "備份至遠端儲存庫",
       };
       return item;
     }
@@ -158,7 +159,7 @@ export class RepositoryTreeProvider
     if (node.kind === "action") {
       const action = {
         backup: {
-          label: "備份至 GitHub",
+          label: "備份至遠端儲存庫",
           description: "偵測到本機變更",
           tooltip: "本機對話有新內容或標題變更，按一下建立備份並上傳",
           icon: "cloud-upload",

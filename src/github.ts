@@ -1,7 +1,11 @@
 import * as vscode from "vscode";
 import { getConfig } from "./config";
 import { Git } from "./git";
-import { BackupRepository, selectAutomaticBackupRepo } from "./githubState";
+import {
+  BackupRepository,
+  normalizeRemoteInput,
+  selectAutomaticBackupRepo,
+} from "./githubState";
 import { STORE_FORMAT_VERSION } from "./sessionStore";
 
 const BACKUP_REPOSITORY_DESCRIPTION =
@@ -54,32 +58,54 @@ async function api(
   return { status: res.status, json };
 }
 
-export async function ensurePrivateRepo(
-  token: string,
-  name: string
-): Promise<{ login: string; url: string }> {
+/** 可以放備份庫的位置：自己的帳號，或使用者所屬的組織。 */
+export interface RepoOwner {
+  login: string;
+  kind: "user" | "org";
+}
+
+export async function listRepoOwners(token: string): Promise<RepoOwner[]> {
   const user = await api(token, "GET", "/user");
   if (user.status !== 200) {
     throw new Error(`無法取得 GitHub 使用者資訊 (HTTP ${user.status})`);
   }
-  const login: string = user.json.login;
-  const existing = await api(token, "GET", `/repos/${login}/${name}`);
+  const owners: RepoOwner[] = [{ login: user.json.login, kind: "user" }];
+  const orgs = await api(token, "GET", "/user/orgs?per_page=100");
+  if (orgs.status === 200 && Array.isArray(orgs.json)) {
+    for (const org of orgs.json) {
+      if (typeof org?.login === "string") {
+        owners.push({ login: org.login, kind: "org" });
+      }
+    }
+  }
+  // 組織列表拿不到（token 未對該組織授權 SSO 等）不算失敗：至少還能用自己的帳號。
+  return owners;
+}
+
+export async function ensurePrivateRepo(
+  token: string,
+  owner: RepoOwner,
+  name: string
+): Promise<{ fullName: string; url: string }> {
+  const fullName = `${owner.login}/${name}`;
+  const existing = await api(token, "GET", `/repos/${fullName}`);
   if (existing.status === 200) {
     if (!existing.json.private) {
-      throw new Error(`儲存庫 ${login}/${name} 已存在但不是私人的，拒絕使用。`);
+      throw new Error(`儲存庫 ${fullName} 已存在但不是私人的，拒絕使用。`);
     }
-    return { login, url: existing.json.clone_url };
+    return { fullName, url: existing.json.clone_url };
   }
   if (existing.status !== 404) {
-    throw new Error(`無法檢查儲存庫 ${login}/${name} (HTTP ${existing.status})`);
+    throw new Error(`無法檢查儲存庫 ${fullName} (HTTP ${existing.status})`);
   }
-  const created = await api(token, "POST", "/user/repos", {
-    name,
-    private: true,
-    description: BACKUP_REPOSITORY_DESCRIPTION,
-  });
+  const created = await api(
+    token,
+    "POST",
+    owner.kind === "org" ? `/orgs/${owner.login}/repos` : "/user/repos",
+    { name, private: true, description: BACKUP_REPOSITORY_DESCRIPTION }
+  );
   if (created.status === 201) {
-    return { login, url: created.json.clone_url };
+    return { fullName, url: created.json.clone_url };
   }
   throw new Error(
     `建立儲存庫失敗 (HTTP ${created.status})：` +
@@ -94,7 +120,8 @@ export async function findBackupRepositories(
   const response = await api(
     token,
     "GET",
-    "/user/repos?visibility=private&affiliation=owner&sort=updated&per_page=100"
+    "/user/repos?visibility=private&affiliation=owner,organization_member" +
+      "&sort=updated&per_page=100"
   );
   if (response.status !== 200 || !Array.isArray(response.json)) {
     throw new Error(`無法列出 GitHub 私人儲存庫 (HTTP ${response.status})`);
@@ -136,15 +163,18 @@ export async function setupRemote(out: vscode.OutputChannel): Promise<void> {
   await git.ensureRepo();
   const token = await getSessionToken(true);
   if (!token) {
-    vscode.window.showErrorMessage(
-      "Session Backup: 需要 GitHub 授權才能建立私人儲存庫。"
-    );
+    // 沒有 GitHub 授權不代表不能備份：自架或其他 git server 只需要一個 remote。
+    await connectManualRemote(git, out);
     return;
   }
   const repositories = await findBackupRepositories(token, cfg.repoName);
   let selected = selectAutomaticBackupRepo(repositories, cfg.repoName);
-  if (!selected && repositories.length > 1) {
-    const createLabel = "$(add) 建立新的備份儲存庫";
+  if (!selected) {
+    const create = { label: "$(add) 建立或連結 GitHub 儲存庫", detail: "可選擇個人帳號或所屬組織" };
+    const manual = {
+      label: "$(link) 手動輸入 remote URL",
+      detail: "GitLab、Gitea、自架 GitHub Enterprise，或別人分享的組織儲存庫",
+    };
     const picked = await vscode.window.showQuickPick(
       [
         ...repositories.map((repo) => ({
@@ -152,14 +182,19 @@ export async function setupRemote(out: vscode.OutputChannel): Promise<void> {
           description: "現有 Session Backup",
           repo,
         })),
-        { label: createLabel, description: "建立新的私人儲存庫", repo: undefined },
+        create,
+        manual,
       ],
-      { placeHolder: "選擇要重新連接的 Session Backup 儲存庫" }
+      { placeHolder: "選擇要連接的備份儲存庫" }
     );
     if (!picked) {
       return;
     }
-    selected = picked.repo;
+    if (picked === manual) {
+      await connectManualRemote(git, out);
+      return;
+    }
+    selected = "repo" in picked ? picked.repo : undefined;
   }
   if (selected) {
     await git.setRemote(selected.url);
@@ -168,10 +203,14 @@ export async function setupRemote(out: vscode.OutputChannel): Promise<void> {
     );
     return;
   }
+  const owner = await pickRepoOwner(token);
+  if (!owner) {
+    return;
+  }
   // 這個輸入框同時是「連結」與「建立」的入口（ensurePrivateRepo 先查再建），
   // 沒有提示的話看起來只像建立新 repo，要講清楚兩種結果。
   const name = await vscode.window.showInputBox({
-    title: "連接 GitHub 備份儲存庫",
+    title: `連接 ${owner.login} 底下的備份儲存庫`,
     prompt:
       "同名的私人儲存庫已存在時直接連結，不存在才建立新的（公開儲存庫會被拒絕）",
     placeHolder: cfg.repoName,
@@ -191,9 +230,61 @@ export async function setupRemote(out: vscode.OutputChannel): Promise<void> {
   if (!repoName) {
     return;
   }
-  const repo = await ensurePrivateRepo(token, repoName);
+  const repo = await ensurePrivateRepo(token, owner, repoName);
   await git.setRemote(repo.url);
   vscode.window.showInformationMessage(
-    `Session Backup: 已設定遠端 ${repo.login}/${repoName}（私人）。之後備份會自動 push。`
+    `Session Backup: 已設定遠端 ${repo.fullName}（私人）。之後備份會自動 push。`
+  );
+}
+
+/** 只有一個可用位置（沒有組織）時不打擾使用者。 */
+async function pickRepoOwner(token: string): Promise<RepoOwner | undefined> {
+  const owners = await listRepoOwners(token);
+  if (owners.length <= 1) {
+    return owners[0];
+  }
+  const picked = await vscode.window.showQuickPick(
+    owners.map((owner) => ({
+      label: owner.login,
+      description: owner.kind === "org" ? "組織" : "個人帳號",
+      owner,
+    })),
+    { placeHolder: "備份儲存庫要建立在哪裡？" }
+  );
+  return picked?.owner;
+}
+
+/**
+ * 手動接任何 git server。GitHub API 只用在探索與建立儲存庫，
+ * 備份本身只需要 push，認證交給 git credential manager / SSH。
+ */
+async function connectManualRemote(git: Git, out: vscode.OutputChannel): Promise<void> {
+  const current = await git.getRemote();
+  const input = await vscode.window.showInputBox({
+    title: "手動設定備份儲存庫的 remote URL",
+    prompt: "https://、ssh:// 或 git@host:owner/repo.git；認證沿用 git 既有的憑證設定",
+    placeHolder: "https://gitlab.example.com/team/agent-session-backup.git",
+    value: current ?? "",
+    ignoreFocusOut: true,
+    validateInput: (v) =>
+      !v.trim() || normalizeRemoteInput(v) ? undefined : "看起來不是有效的 git remote URL",
+  });
+  const url = input ? normalizeRemoteInput(input) : undefined;
+  if (!url) {
+    return;
+  }
+  await git.setRemote(url);
+  // 立刻試連一次：錯的 URL 或缺憑證的話，現在講比等到下次自動備份失敗好。
+  const fetch = await git.fetchOrigin();
+  if (fetch.code === 0) {
+    vscode.window.showInformationMessage(
+      `Session Backup: 已設定遠端 ${url}。之後備份會自動 push。`
+    );
+    return;
+  }
+  const message = (fetch.stderr || fetch.stdout).trim();
+  out.appendLine(`remote 連線測試失敗：${message}`);
+  vscode.window.showWarningMessage(
+    `Session Backup: 已記下遠端 ${url}，但連線測試失敗（憑證或網址可能有誤，詳見記錄）。`
   );
 }

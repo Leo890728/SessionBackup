@@ -42,8 +42,9 @@ machines/<machine-id>/resolutions.json
 
 側邊欄頂端的 **GitHub Backup** 會依狀態顯示操作：
 
-- 尚未設定遠端：**連接 GitHub**，使用 VS Code GitHub 登入建立或連結私人 repo。
-- 已連接但 GitHub 尚無備份分支：**備份至 GitHub**，像 Source Control 的 Publish 動作一樣建立第一個 commit 並 push。
+- 尚未設定遠端：**連接備份儲存庫**，用 VS Code GitHub 登入在個人帳號或所屬組織底下建立／連結私人 repo；
+  其他 git server（GitLab、Gitea、GitHub Enterprise、別人分享的 repo）選「手動輸入 remote URL」，認證沿用 git 既有憑證。
+- 已連接但遠端尚無備份分支：**備份至遠端儲存庫**，像 Source Control 的 Publish 動作一樣建立第一個 commit 並 push。
 - 已有備份：顯示 `owner/repo` 與最近備份時間；點擊可立即再次備份。
 - 偵測到本機變更時，狀態磚下方會展開「**有變動的 sessions**」清單
   （類似 Source Control 的 Changes）：標示 **新增** 或 **已變更**、
@@ -144,8 +145,8 @@ Codex 以 `session_meta.payload.cwd` 決定 session 屬於哪個工作目錄—�
 | 命令 | 說明 |
 | --- | --- |
 | `Session Backup: 立即備份` | 收集 session → 建立 revision → secret 掃描 → commit → push |
-| `Session Backup: 連接 GitHub` | 使用 VS Code GitHub 登入建立或連結私人 repo |
-| `Session Backup: 備份至 GitHub` | 建立第一份安全掃描過的備份並 push |
+| `Session Backup: 連接備份儲存庫` | 在個人／組織底下建立或連結私人 repo，或手動輸入任何 git server 的 remote URL |
+| `Session Backup: 備份至遠端儲存庫` | 建立第一份安全掃描過的備份並 push |
 | `Session Backup: 同步並合併其他電腦紀錄...` | 備份本機、取得遠端並以 no-delete 規則合併 |
 | `Session Backup: 管理 Claude 專案對應...` | 重新定位、開啟或移除本機 projectId 對應 |
 | `Session Backup: 管理要備份的對話...` | 檢視選取規則，勾選即可刪除 |
