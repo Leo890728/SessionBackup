@@ -42,14 +42,21 @@ export interface ChangedSession {
 const keyOf = (s: { tool: string; id: string; relativePath: string }) =>
   `${s.tool}:${s.id}:${s.relativePath}`;
 
+/**
+ * hash 是內容的權威身分：相同就代表這次備份不會寫出新的 revision。
+ *
+ * 刻意不比 mtime 與 size。Claude Code 載入舊對話時會把檔案原封不動重寫一次、
+ * 只推進 mtime，比 mtime 會讓「只是打開來看」的對話全部列進「有變動的 sessions」；
+ * size 則是內容的函數，hash 已經涵蓋。
+ *
+ * title/titleUpdatedAt/project 是 manifest 自己的中繼資料，不在檔案 hash 裡，仍要比。
+ */
 function entryDiffers(
-  previous: { hash: string; mtimeMs: number; size: number; title?: string; titleUpdatedAt?: string; project?: unknown },
+  previous: { hash: string; title?: string; titleUpdatedAt?: string; project?: unknown },
   session: LocalSession
 ): boolean {
   return (
     previous.hash !== session.hash ||
-    previous.mtimeMs !== session.mtimeMs ||
-    previous.size !== session.size ||
     previous.title !== session.title ||
     previous.titleUpdatedAt !== session.titleUpdatedAt ||
     JSON.stringify(previous.project) !== JSON.stringify(session.project)

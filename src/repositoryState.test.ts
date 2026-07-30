@@ -63,6 +63,12 @@ describe("localSessionsChanged", () => {
     assert.equal(localSessionsChanged([{ ...local, title: "新標題" }], manifest), true);
   });
 
+  it("ignores a bumped mtime when the content hash is unchanged", () => {
+    // Claude Code 載入舊對話會把檔案原封不動重寫一次、只推進 mtime。
+    // 那不是變更，否則「只是打開來看」的對話全部會列進「有變動的 sessions」。
+    assert.equal(localSessionsChanged([{ ...local, mtimeMs: 999 }], manifest), false);
+  });
+
   it("treats resumed Codex rollouts sharing a session id as unchanged", () => {
     // Codex resume 會有多個 rollout 檔共用同一個 session id。
     const resumed: LocalSession = {
