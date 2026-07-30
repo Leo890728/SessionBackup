@@ -1,5 +1,5 @@
 import { SelectionSet } from "./selection";
-import { MachineManifest, ManifestSession } from "./sessionStore";
+import { hashFileCached, MachineManifest, ManifestSession } from "./sessionStore";
 import { Tool } from "./sessions";
 
 export type SessionSyncStatus =
@@ -100,4 +100,41 @@ export function sessionSyncStatus(
   return entry.mtimeMs === session.mtimeMs && entry.size === session.size
     ? "synced"
     : "modified";
+}
+
+/**
+ * 樹狀圖用：sessionSyncStatus 只比 mtime+size（stat 便宜、不用讀檔），
+ * 但 Claude 讀歷史會把同樣的內容重寫一次、只推進 mtime，那樣會誤標成未同步。
+ * 只有在 size 相同而 mtime 不同這個可疑情況下才實際算 hash（hashFileCached 有快取，
+ * 同一次改動只會算一次）。
+ */
+export async function resolveSessionStatus(
+  lookup: StatusLookup,
+  session: {
+    tool: Tool;
+    id: string;
+    file: string;
+    relativePath: string;
+    mtimeMs: number;
+    size: number;
+    claudeProjectDir?: string;
+  }
+): Promise<SessionSyncStatus> {
+  const status = sessionSyncStatus(lookup, session);
+  if (status !== "modified") {
+    return status;
+  }
+  const entry = lookup.byPath.get(`${session.tool}:${session.relativePath}`);
+  if (!entry || entry.size !== session.size) {
+    return status;
+  }
+  try {
+    const hash = await hashFileCached(session.file, {
+      mtimeMs: session.mtimeMs,
+      size: session.size,
+    });
+    return hash === entry.hash ? "synced" : "modified";
+  } catch {
+    return status;
+  }
 }

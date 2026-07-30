@@ -188,6 +188,12 @@ async function doBackup(
         `（檔案過大 ${(session.size / 1048576).toFixed(1)} MB，${session.file}）`
     );
   }
+  for (const session of stored.deferred) {
+    out.appendLine(
+      `延後備份「${await sessionDisplayName(session)}」` +
+        `（複製期間檔案又被寫入，下次備份會重收，${session.file}）`
+    );
+  }
 
   // 只有 store/ 底下的檔案是真正新寫入的 session 內容（其餘是 manifest/format 中繼資料）
   const revisionCount = stored.copied.filter((rel) => rel.startsWith("store/")).length;

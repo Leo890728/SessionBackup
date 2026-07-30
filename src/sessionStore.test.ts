@@ -8,6 +8,7 @@ import {
   collectLocalSessions,
   resolveLocalTarget,
   safeSegment,
+  sha256File,
   storeSessions,
 } from "./sessionStore";
 
@@ -54,6 +55,7 @@ describe("storeSessions", () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "session-store-test-"));
     const source = path.join(root, "source.jsonl");
     await fs.promises.writeFile(source, line("1", "hello") + "\n");
+    const hash = await sha256File(source);
     const session = {
       tool: "claude" as const,
       id: "session-1",
@@ -61,7 +63,7 @@ describe("storeSessions", () => {
       relativePath: "projects/test/session-1.jsonl",
       mtimeMs: 1,
       size: (await fs.promises.stat(source)).size,
-      hash: "abc123",
+      hash,
     };
     try {
       const first = await storeSessions(root, "machine-a", [session], 1024 * 1024);
@@ -69,10 +71,57 @@ describe("storeSessions", () => {
       assert.deepEqual(first.copied.sort(), [
         "format.json",
         "machines/machine-a/manifest.json",
-        "store/claude/session-1/abc123.jsonl",
+        `store/claude/session-1/${hash}.jsonl`,
       ]);
       assert.deepEqual(second.copied, []);
       assert.equal(second.manifest.updatedAt, first.manifest.updatedAt);
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("defers a session that changed between hashing and copying", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "session-store-test-"));
+    const source = path.join(root, "source.jsonl");
+    await fs.promises.writeFile(source, line("1", "hello") + "\n");
+    const stale = {
+      tool: "claude" as const,
+      id: "session-1",
+      file: source,
+      relativePath: "projects/test/session-1.jsonl",
+      mtimeMs: 1,
+      size: (await fs.promises.stat(source)).size,
+      hash: await sha256File(source),
+    };
+    try {
+      const first = await storeSessions(root, "machine-a", [stale], 1024 * 1024);
+      // 收集階段算到的是第二行寫完的狀態，複製時檔案已經長到第三行。
+      await fs.promises.appendFile(source, line("2", "reply") + "\n");
+      const collected = {
+        ...stale,
+        mtimeMs: 2,
+        size: (await fs.promises.stat(source)).size,
+        hash: await sha256File(source),
+      };
+      await fs.promises.appendFile(source, line("3", "still typing") + "\n");
+      const second = await storeSessions(root, "machine-a", [collected], 1024 * 1024);
+
+      assert.deepEqual(second.deferred.map((s) => s.id), ["session-1"]);
+      assert.equal(
+        second.copied.some((rel) => rel.startsWith("store/")),
+        false
+      );
+      // manifest 沿用上一輪的紀錄，指向的仍是真的存在且內容相符的 revision。
+      assert.deepEqual(
+        second.manifest.sessions,
+        JSON.parse(JSON.stringify(first.manifest.sessions))
+      );
+      const revisions = await fs.promises.readdir(path.join(root, "store", "claude", "session-1"));
+      assert.deepEqual(revisions, [`${stale.hash}.jsonl`]);
+      assert.equal(
+        await sha256File(path.join(root, "store", "claude", "session-1", revisions[0])),
+        stale.hash
+      );
     } finally {
       await fs.promises.rm(root, { recursive: true, force: true });
     }
@@ -201,7 +250,7 @@ describe("isRevisionStored", () => {
       relativePath: "sessions/thread-1.jsonl",
       mtimeMs: 1,
       size: (await fs.promises.stat(source)).size,
-      hash: "hash-1",
+      hash: await sha256File(source),
     };
     const { isRevisionStored } = require("./sessionStore") as typeof import("./sessionStore");
     try {

@@ -120,7 +120,10 @@ export async function sha256File(file: string): Promise<string> {
 // 沒有快取的話等於每分鐘重算約 100MB 的雜湊。
 const hashCache = new Map<string, { mtimeMs: number; size: number; hash: string }>();
 
-async function hashFileCached(file: string, stat: fs.Stats): Promise<string> {
+export async function hashFileCached(
+  file: string,
+  stat: { mtimeMs: number; size: number }
+): Promise<string> {
   const cached = hashCache.get(file);
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
     return cached.hash;
@@ -235,10 +238,26 @@ export async function storeSessions(
   machineId: string,
   sessions: LocalSession[],
   maxBytes: number
-): Promise<{ copied: string[]; skipped: LocalSession[]; manifest: MachineManifest }> {
+): Promise<{
+  copied: string[];
+  skipped: LocalSession[];
+  deferred: LocalSession[];
+  manifest: MachineManifest;
+}> {
   const copied: string[] = [];
   const skipped: LocalSession[] = [];
+  const deferred: LocalSession[] = [];
   const manifestSessions: ManifestSession[] = [];
+
+  const manifestRel = manifestRelativePath(machineId);
+  const manifestFile = path.join(repoPath, ...manifestRel.split("/"));
+  const previous = await readManifest(manifestFile);
+  const previousByPath = new Map(
+    (previous?.sessions ?? []).map((session) => [
+      `${session.tool}:${session.relativePath}`,
+      session,
+    ])
+  );
 
   const formatFile = path.join(repoPath, "format.json");
   const formatContent = JSON.stringify(
@@ -259,8 +278,16 @@ export async function storeSessions(
     const rel = revisionRelativePath(session.tool, session.id, session.hash);
     const destination = path.join(repoPath, ...rel.split("/"));
     if (!fs.existsSync(destination)) {
-      await fs.promises.mkdir(path.dirname(destination), { recursive: true });
-      await fs.promises.copyFile(session.file, destination);
+      if (!(await copyVerifiedRevision(session.file, destination, session.hash))) {
+        // 檔案在算 hash 之後、複製之前又被寫入。沿用上一輪的 manifest 紀錄，
+        // manifest 才不會指向一份內容與檔名對不上的 revision；下一輪備份會重收。
+        deferred.push(session);
+        const stale = previousByPath.get(`${session.tool}:${session.relativePath}`);
+        if (stale) {
+          manifestSessions.push(stale);
+        }
+        continue;
+      }
       copied.push(rel);
     }
     manifestSessions.push({
@@ -283,10 +310,7 @@ export async function storeSessions(
     updatedAt: new Date().toISOString(),
     sessions: manifestSessions,
   };
-  const manifestRel = manifestRelativePath(machineId);
-  const manifestFile = path.join(repoPath, ...manifestRel.split("/"));
   await fs.promises.mkdir(path.dirname(manifestFile), { recursive: true });
-  const previous = await readManifest(manifestFile);
   if (
     previous?.formatVersion === manifest.formatVersion &&
     previous.machineId === manifest.machineId &&
@@ -297,7 +321,34 @@ export async function storeSessions(
     await fs.promises.writeFile(manifestFile, JSON.stringify(manifest, null, 2) + "\n", "utf8");
     copied.push(manifestRel);
   }
-  return { copied, skipped, manifest };
+  return { copied, skipped, deferred, manifest };
+}
+
+/**
+ * hash 是收集階段算的，session 還在被寫入時（Claude 正在回話）複製到的內容
+ * 會與 hash 對不上，store 的 content-addressed 前提就破了。
+ * 先寫進暫存檔驗算，對得上才 rename 到正式位置。
+ */
+async function copyVerifiedRevision(
+  source: string,
+  destination: string,
+  expectedHash: string
+): Promise<boolean> {
+  await fs.promises.mkdir(path.dirname(destination), { recursive: true });
+  const temp = `${destination}.${process.pid}.tmp`;
+  try {
+    await fs.promises.copyFile(source, temp);
+    if ((await sha256File(temp)) !== expectedHash) {
+      return false;
+    }
+    await fs.promises.rename(temp, destination);
+    return true;
+  } catch {
+    // 另一個備份同時寫入了同一個 revision：內容相同，視為已存在。
+    return fs.existsSync(destination);
+  } finally {
+    await fs.promises.rm(temp, { force: true }).catch(() => undefined);
+  }
 }
 
 export async function readMachineManifests(repoPath: string): Promise<MachineManifest[]> {

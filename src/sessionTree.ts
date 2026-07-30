@@ -26,8 +26,8 @@ import {
 } from "./sessions";
 import {
   buildStatusLookup,
+  resolveSessionStatus,
   SessionSyncStatus,
-  sessionSyncStatus,
   STATUS_DISPLAY,
   StatusLookup,
 } from "./sessionStatus";
@@ -307,20 +307,23 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         listClaudeSessions(el.project.dir),
         this.getLookup(),
       ]);
-      return sessions.map((info) => ({
-        kind: "session" as const,
-        info,
-        claudeProjectDir: el.projectDir,
-        status: sessionSyncStatus(lookup, {
-          tool: info.tool,
-          id: info.backupId,
-          // manifest 中 Claude 的 relativePath 不含機器的 project bucket
-          relativePath: "projects/" + path.basename(info.file),
-          mtimeMs: info.mtime,
-          size: info.size,
+      return await Promise.all(
+        sessions.map(async (info) => ({
+          kind: "session" as const,
+          info,
           claudeProjectDir: el.projectDir,
-        }),
-      }));
+          status: await resolveSessionStatus(lookup, {
+            tool: info.tool,
+            id: info.backupId,
+            file: info.file,
+            // manifest 中 Claude 的 relativePath 不含機器的 project bucket
+            relativePath: "projects/" + path.basename(info.file),
+            mtimeMs: info.mtime,
+            size: info.size,
+            claudeProjectDir: el.projectDir,
+          }),
+        }))
+      );
     }
     if (el.kind === "codexDate") {
       return el.sessions;
@@ -374,6 +377,25 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       this.getLookup(),
     ]);
     const { topLevel, subsByHost } = groupCodexThreads(infos);
+    // 狀態要讀檔（見 resolveSessionStatus），先一次算完，遞迴組樹時才能維持同步。
+    const statusByFile = new Map(
+      await Promise.all(
+        infos.map(
+          async (info) =>
+            [
+              info.file,
+              await resolveSessionStatus(lookup, {
+                tool: info.tool,
+                id: info.backupId,
+                file: info.file,
+                relativePath: path.relative(codexRoot, info.file).replace(/\\/g, "/"),
+                mtimeMs: info.mtime,
+                size: info.size,
+              }),
+            ] as const
+        )
+      )
+    );
 
     const toNode = (info: SessionInfo, ancestors: Set<string>): TreeNode => {
       const subs = subsByHost.get(info.file);
@@ -386,13 +408,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       return {
         kind: "session",
         info,
-        status: sessionSyncStatus(lookup, {
-          tool: info.tool,
-          id: info.backupId,
-          relativePath: path.relative(codexRoot, info.file).replace(/\\/g, "/"),
-          mtimeMs: info.mtime,
-          size: info.size,
-        }),
+        status: statusByFile.get(info.file) ?? "unbacked",
         subs: nested?.length ? nested : undefined,
       };
     };
