@@ -474,13 +474,132 @@ export function groupCodexThreads(infos: SessionInfo[]): CodexThreadGroup {
   return { topLevel, subsByHost, orphans };
 }
 
-/* ---------- Markdown 匯出/預覽 ---------- */
+/* ---------- 對話內容解析 ---------- */
 
-export async function renderSessionMarkdown(tool: Tool, file: string): Promise<string> {
+export type TranscriptBlock =
+  | { kind: "text"; text: string }
+  | { kind: "thinking"; text: string }
+  | { kind: "tool"; name: string; detail?: string }
+  /** IDE 附加在提問前面的上下文（開啟中的檔案、選取範圍），不是使用者打的字。 */
+  | { kind: "context"; label: string; detail: string }
+  /** 一輪回覆中途的過程（進度說明與工具呼叫），預覽收合起來只留最後的答案。 */
+  | { kind: "work"; durationMs?: number; items: TranscriptBlock[] };
+
+export interface TranscriptMessage {
+  /** notice 是對話流程本身的事件（例如使用者中斷），不屬於任何一方的發言。 */
+  role: "user" | "assistant" | "notice";
+  blocks: TranscriptBlock[];
+  /** 這則訊息第一段內容的時間（Codex 的部分紀錄沒有時間欄位）。 */
+  timestamp?: string;
+}
+
+export interface Transcript {
+  tool: Tool;
+  file: string;
+  title: string;
+  cwd?: string;
+  messages: TranscriptMessage[];
+}
+
+/** 工具呼叫在預覽裡只佔一行，從參數挑一個最能代表這次呼叫的值。 */
+const TOOL_DETAIL_KEYS = [
+  "command",
+  "file_path",
+  "path",
+  "pattern",
+  "query",
+  "url",
+  "description",
+  "prompt",
+];
+
+function toolDetail(input: unknown): string | undefined {
+  if (typeof input === "string") {
+    return oneLine(input);
+  }
+  if (!input || typeof input !== "object") {
+    return undefined;
+  }
+  const record = input as Record<string, unknown>;
+  for (const key of TOOL_DETAIL_KEYS) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return oneLine(value);
+    }
+    if (Array.isArray(value) && value.length) {
+      return oneLine(value.join(" "));
+    }
+  }
+  return undefined;
+}
+
+function oneLine(value: string): string {
+  const text = value.replace(/\s+/g, " ").trim();
+  return text.length > 160 ? text.slice(0, 160) + "…" : text;
+}
+
+/** IDE 注入的上下文標籤：預覽裡收成一張小卡片，而不是原封不動印出標籤。 */
+const IDE_CONTEXT_TAGS = [
+  { tag: "ide_opened_file", label: "開啟檔案" },
+  { tag: "ide_selection", label: "選取內容" },
+];
+
+const PATH_IN_TEXT = /([A-Za-z]:[\\/][^\s"'<>]+|\/[^\s"'<>]{2,})/;
+
+/**
+ * 從使用者訊息中抽出 IDE 上下文與注入的 system-reminder。
+ * 這些都不是使用者打的字，混在內文裡會讓預覽讀起來像雜訊。
+ */
+export function extractUserContext(text: string): {
+  contexts: { label: string; detail: string }[];
+  rest: string;
+} {
+  const contexts: { label: string; detail: string }[] = [];
+  let rest = text;
+  for (const { tag, label } of IDE_CONTEXT_TAGS) {
+    const pattern = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, "g");
+    rest = rest.replace(pattern, (_, inner: string) => {
+      const detail = PATH_IN_TEXT.exec(inner)?.[1] ?? oneLine(inner);
+      if (detail) {
+        contexts.push({ label, detail });
+      }
+      return "";
+    });
+  }
+  rest = rest.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "");
+  return { contexts, rest: rest.trim() };
+}
+
+/** Claude Code 在使用者按下中斷時寫入的標記，獨立成一則流程訊息。 */
+const INTERRUPTED = /^\s*\[Request interrupted by user[^\]]*\]\s*$/;
+
+export function interruptionNotice(text: string): string | undefined {
+  return INTERRUPTED.test(text) ? "使用者中斷了這次回覆" : undefined;
+}
+
+/**
+ * 把 JSONL 轉成訊息串，預覽與 Markdown 匯出共用同一份解析結果。
+ * 連續的同角色內容會併成一則訊息：工具呼叫因此留在觸發它的那次回覆裡，
+ * 而不是變成一則獨立訊息。
+ */
+export async function readTranscript(tool: Tool, file: string): Promise<Transcript> {
   const lines = await readAllLines(file);
-  const parts: string[] = [];
+  const messages: TranscriptMessage[] = [];
   let title = tool === "claude" ? claudeAiTitle(lines) ?? "(無標題)" : "(無標題)";
   let cwd: string | undefined;
+
+  /**
+   * 助理的連續紀錄併成一則，工具呼叫才會留在觸發它的那次回覆裡。
+   * 使用者訊息不併：每一次送出都是獨立的一輪，併起來會讓中斷前後的兩句話黏成一段。
+   */
+  const appendAssistant = (block: TranscriptBlock, timestamp?: string) => {
+    const last = messages[messages.length - 1];
+    if (last?.role === "assistant") {
+      last.blocks.push(block);
+      return;
+    }
+    messages.push({ role: "assistant", blocks: [block], timestamp });
+  };
 
   if (tool === "claude") {
     for (const o of lines) {
@@ -490,32 +609,90 @@ export async function renderSessionMarkdown(tool: Tool, file: string): Promise<s
       if (o.type === "user" && o.message && o.isMeta !== true) {
         const t = claudeText(o.message.content);
         if (t && claudeUserOk(t)) {
-          parts.push(`## 👤 User\n\n${t}`);
-        }
-      } else if (o.type === "assistant" && o.message && Array.isArray(o.message.content)) {
-        const texts: string[] = [];
-        const tools: string[] = [];
-        for (const c of o.message.content) {
-          if (c?.type === "text" && c.text) {
-            texts.push(c.text);
-          } else if (c?.type === "tool_use" && c.name) {
-            tools.push(c.name);
+          const notice = interruptionNotice(t);
+          if (notice) {
+            messages.push({
+              role: "notice",
+              blocks: [{ kind: "text", text: notice }],
+              timestamp: o.timestamp,
+            });
+          } else {
+            const { contexts, rest } = extractUserContext(t);
+            // 只有 IDE 上下文、沒有真正提問的訊息不顯示。
+            if (rest) {
+              messages.push({
+                role: "user",
+                blocks: [
+                  ...contexts.map((context) => ({ kind: "context" as const, ...context })),
+                  { kind: "text" as const, text: rest },
+                ],
+                timestamp: o.timestamp,
+              });
+            }
           }
         }
-        const body =
-          (texts.length ? texts.join("\n\n") : "") +
-          (tools.length ? `\n\n> 🔧 ${tools.join("、")}` : "");
-        if (body.trim()) {
-          parts.push(`## 🤖 Assistant\n\n${body.trim()}`);
+      } else if (o.type === "assistant" && o.message && Array.isArray(o.message.content)) {
+        for (const c of o.message.content) {
+          if (c?.type === "text" && typeof c.text === "string" && c.text.trim()) {
+            appendAssistant({ kind: "text", text: c.text }, o.timestamp);
+          } else if (
+            c?.type === "thinking" &&
+            typeof c.thinking === "string" &&
+            c.thinking.trim()
+          ) {
+            // thinking 的明文不一定會被寫進紀錄（只留加密的 signature），空的就跳過。
+            appendAssistant({ kind: "thinking", text: c.thinking }, o.timestamp);
+          } else if (c?.type === "tool_use" && c.name) {
+            appendAssistant(
+              { kind: "tool", name: c.name, detail: toolDetail(c.input) },
+              o.timestamp
+            );
+          }
         }
       }
     }
   } else {
     let id = codexSessionIdFromFilename(file);
+    // Codex 一輪回覆會夾雜數次進度說明，最後一則才是答案；
+    // 先收集起來，等這一輪結束（task_complete）再決定哪些要收合。
+    let pending: TranscriptBlock[] = [];
+    let pendingAt: string | undefined;
+    let durationMs: number | undefined;
+
+    const flushTurn = () => {
+      if (pending.length) {
+        const lastText = findLastTextIndex(pending);
+        const work = lastText >= 0 ? pending.slice(0, lastText) : pending;
+        const answer = lastText >= 0 ? pending.slice(lastText) : [];
+        messages.push({
+          role: "assistant",
+          blocks: [
+            ...(work.length ? [{ kind: "work" as const, durationMs, items: work }] : []),
+            ...answer,
+          ],
+          timestamp: pendingAt,
+        });
+      }
+      pending = [];
+      pendingAt = undefined;
+      durationMs = undefined;
+    };
+    const collect = (block: TranscriptBlock, timestamp?: string) => {
+      pending.push(block);
+      pendingAt = pendingAt ?? timestamp;
+    };
+
     for (const o of lines) {
       if (o.type === "session_meta" && o.payload) {
         cwd = o.payload.cwd ?? cwd;
         id = o.payload.session_id ?? o.payload.id ?? id;
+      }
+      if (o.type === "event_msg" && o.payload?.type === "task_complete") {
+        if (typeof o.payload.duration_ms === "number") {
+          durationMs = o.payload.duration_ms;
+        }
+        flushTurn();
+        continue;
       }
       if (o.type !== "response_item" || !o.payload) {
         continue;
@@ -524,22 +701,40 @@ export async function renderSessionMarkdown(tool: Tool, file: string): Promise<s
       if (p.type === "message" && p.role === "user") {
         const t = codexTexts(p.content, "input_text");
         if (t && codexUserOk(t)) {
-          parts.push(`## 👤 User\n\n${t}`);
+          const { contexts, rest } = extractUserContext(t);
+          if (rest) {
+            // 沒有 task_complete 的舊紀錄：遇到下一次提問就把上一輪收掉。
+            flushTurn();
+            messages.push({
+              role: "user",
+              blocks: [
+                ...contexts.map((context) => ({ kind: "context" as const, ...context })),
+                { kind: "text" as const, text: rest },
+              ],
+              timestamp: o.timestamp,
+            });
+          }
         }
       } else if (p.type === "message" && p.role === "assistant") {
         const t = codexTexts(p.content, "output_text");
         if (t) {
-          parts.push(`## 🤖 Assistant\n\n${t}`);
+          collect({ kind: "text", text: t }, o.timestamp);
+        }
+      } else if (p.type === "reasoning") {
+        const t = codexTexts(p.summary, "summary_text");
+        if (t) {
+          collect({ kind: "thinking", text: t }, o.timestamp);
         }
       } else if (p.type === "function_call" && p.name) {
-        parts.push(`> 🔧 ${p.name}`);
+        collect(
+          { kind: "tool", name: p.name, detail: toolDetail(safeJson(p.arguments)) },
+          o.timestamp
+        );
       } else if (p.type === "local_shell_call" && p.action?.command) {
-        const cmd = Array.isArray(p.action.command)
-          ? p.action.command.join(" ")
-          : String(p.action.command);
-        parts.push(`> 🔧 shell: \`${cmd.slice(0, 120)}\``);
+        collect({ kind: "tool", name: "shell", detail: toolDetail(p.action.command) }, o.timestamp);
       }
     }
+    flushTurn();
     const codexRoot = codexRootFromSessionFile(file);
     if (codexRoot) {
       title =
@@ -548,10 +743,74 @@ export async function renderSessionMarkdown(tool: Tool, file: string): Promise<s
     }
   }
 
+  return { tool, file, title: cleanTitle(title), cwd, messages };
+}
+
+function findLastTextIndex(blocks: TranscriptBlock[]): number {
+  for (let index = blocks.length - 1; index >= 0; index--) {
+    if (blocks[index].kind === "text") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function safeJson(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+/* ---------- Markdown 匯出 ---------- */
+
+export async function renderSessionMarkdown(tool: Tool, file: string): Promise<string> {
+  const transcript = await readTranscript(tool, file);
+  const parts: string[] = [];
+  for (const message of transcript.messages) {
+    const body: string[] = [];
+    const tools: string[] = [];
+    for (const block of message.blocks) {
+      if (block.kind === "text") {
+        body.push(block.text);
+      } else if (block.kind === "thinking") {
+        body.push(`> 💭 ${block.text.replace(/\n/g, "\n> ")}`);
+      } else if (block.kind === "context") {
+        body.push(`> 📄 ${block.label}：\`${block.detail}\``);
+      } else if (block.kind === "work") {
+        for (const item of block.items) {
+          if (item.kind === "text" || item.kind === "thinking") {
+            body.push(`> ${item.text.replace(/\n/g, "\n> ")}`);
+          } else if (item.kind === "tool") {
+            tools.push(item.detail ? `${item.name}：\`${item.detail}\`` : item.name);
+          }
+        }
+      } else {
+        tools.push(block.detail ? `${block.name}：\`${block.detail}\`` : block.name);
+      }
+    }
+    if (tools.length) {
+      body.push(`> 🔧 ${tools.join("、")}`);
+    }
+    const text = body.join("\n\n").trim();
+    if (!text) {
+      continue;
+    }
+    if (message.role === "notice") {
+      parts.push(`_${text}_`);
+    } else {
+      parts.push(`## ${message.role === "user" ? "👤 User" : "🤖 Assistant"}\n\n${text}`);
+    }
+  }
+
   const header =
-    `# ${cleanTitle(title)}\n\n` +
+    `# ${transcript.title}\n\n` +
     `- 工具：${tool === "claude" ? "Claude Code" : "Codex"}\n` +
-    (cwd ? `- 工作目錄：\`${cwd}\`\n` : "") +
+    (transcript.cwd ? `- 工作目錄：\`${transcript.cwd}\`\n` : "") +
     `- 原始檔：\`${file}\`\n`;
   return header + "\n---\n\n" + parts.join("\n\n---\n\n") + "\n";
 }

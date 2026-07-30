@@ -23,7 +23,8 @@ import { ProjectMappingRegistry } from "./projectMapping";
 import { RepositoryTreeProvider } from "./repositoryTree";
 import { describeSelectionKey } from "./selection";
 import { initialSelectionKeys } from "./selectionMigration";
-import { renderSessionMarkdown, Tool } from "./sessions";
+import { renderSessionMarkdown } from "./sessions";
+import { showSessionPreview } from "./sessionPreview";
 import {
   machineIdFromConfig,
   manifestRelativePath,
@@ -35,7 +36,6 @@ import { restoreSessionFile, SecretVault } from "./sessionRedact";
 import { SessionTreeProvider, TreeNode } from "./sessionTree";
 import { rememberKeepLocal, runSync } from "./sync";
 
-const PREVIEW_SCHEME = "session-backup-preview";
 
 let timer: NodeJS.Timeout | undefined;
 let statusItem: vscode.StatusBarItem;
@@ -352,14 +352,6 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   // ---- Session 瀏覽器 ----
-  const previewProvider: vscode.TextDocumentContentProvider = {
-    provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
-      const q = new URLSearchParams(uri.query);
-      const file = q.get("file") ?? "";
-      const tool = (q.get("tool") ?? "claude") as Tool;
-      return renderSessionMarkdown(tool, file);
-    },
-  };
   // Sessions 用 createTreeView 才收得到 checkbox 事件；勾選狀態由選取規則決定，
   // 不讓 VS Code 自動連動父子項目（範圍規則有自己的優先序）。
   const sessionsView = vscode.window.createTreeView("sessionBackup.sessions", {
@@ -373,10 +365,6 @@ export function activate(context: vscode.ExtensionContext): void {
       void tree.handleCheckboxChange(e.items).then(() => repository.refresh(false));
     }),
     vscode.window.registerTreeDataProvider("sessionBackup.repository", repository),
-    vscode.workspace.registerTextDocumentContentProvider(
-      PREVIEW_SCHEME,
-      previewProvider
-    ),
     vscode.commands.registerCommand("sessionBackup.refreshSessions", () =>
       tree.refresh()
     ),
@@ -386,18 +374,7 @@ export function activate(context: vscode.ExtensionContext): void {
         if (node?.kind !== "session") {
           return;
         }
-        const s = node.info;
-        const name = s.title.replace(/[\\/:*?"<>|#]/g, " ").slice(0, 40).trim();
-        const uri = vscode.Uri.parse(
-          `${PREVIEW_SCHEME}:/${encodeURIComponent(name || s.id)}.md?` +
-            new URLSearchParams({ file: s.file, tool: s.tool }).toString()
-        );
-        await vscode.workspace.openTextDocument(uri);
-        try {
-          await vscode.commands.executeCommand("markdown.showPreview", uri);
-        } catch {
-          await vscode.window.showTextDocument(uri, { preview: true });
-        }
+        await showSessionPreview(node.info.tool, node.info.file, context.extensionUri);
       }
     ),
     vscode.commands.registerCommand(

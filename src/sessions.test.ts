@@ -7,7 +7,9 @@ import {
   claudeAiTitle,
   codexSessionInfo,
   listCodexFiles,
+  extractUserContext,
   readClaudeMetadata,
+  readTranscript,
 } from "./sessions";
 
 describe("claudeAiTitle", () => {
@@ -85,6 +87,130 @@ describe("Codex titles", () => {
     } finally {
       await fs.promises.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("extractUserContext", () => {
+  it("pulls the opened file out of the question", () => {
+    const { contexts, rest } = extractUserContext(
+      "<ide_opened_file>The user opened the file d:\\work\\App\\project.md in the IDE. " +
+        "This may or may not be related to the current task.</ide_opened_file>\n" +
+        "規劃討論還有一個問題"
+    );
+    assert.deepEqual(contexts, [{ label: "開啟檔案", detail: "d:\\work\\App\\project.md" }]);
+    assert.equal(rest, "規劃討論還有一個問題");
+  });
+
+  it("drops injected system reminders anywhere in the text", () => {
+    const { contexts, rest } = extractUserContext(
+      "先做 A\n<system-reminder>這是注入的提醒</system-reminder>\n再做 B"
+    );
+    assert.deepEqual(contexts, []);
+    assert.equal(rest, "先做 A\n\n再做 B");
+  });
+
+  it("reports an empty question when only IDE context was sent", () => {
+    const { contexts, rest } = extractUserContext(
+      "<ide_selection>selected lines in d:\\work\\a.ts</ide_selection>"
+    );
+    assert.equal(contexts.length, 1);
+    assert.equal(rest, "");
+  });
+});
+
+describe("readTranscript", () => {
+  const withClaudeFile = async (records: unknown[], run: (file: string) => Promise<void>) => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "transcript-"));
+    const file = path.join(dir, "claude.jsonl");
+    try {
+      await fs.promises.writeFile(
+        file,
+        records.map((record) => JSON.stringify(record)).join("\n") + "\n",
+        "utf8"
+      );
+      await run(file);
+    } finally {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+  };
+
+  it("merges consecutive assistant records so tool calls stay in their turn", async () => {
+    await withClaudeFile(
+      [
+        { aiTitle: "測試對話", cwd: "C:\\work" },
+        { type: "user", message: { content: "幫我看一下" }, timestamp: "2026-07-30T01:00:00Z" },
+        {
+          type: "assistant",
+          message: {
+            content: [
+              { type: "text", text: "我先讀檔案。" },
+              { type: "tool_use", name: "Read", input: { file_path: "C:\\work\\a.ts" } },
+            ],
+          },
+        },
+        // 工具結果是 user 紀錄，預覽不顯示，也不該切斷助理的這一輪
+        { type: "user", message: { content: [{ type: "tool_result", content: "ok" }] } },
+        { type: "assistant", message: { content: [{ type: "text", text: "看完了。" }] } },
+      ],
+      async (file) => {
+        const transcript = await readTranscript("claude", file);
+        assert.equal(transcript.title, "測試對話");
+        assert.equal(transcript.cwd, "C:\\work");
+        assert.deepEqual(
+          transcript.messages.map((message) => message.role),
+          ["user", "assistant"]
+        );
+        assert.deepEqual(transcript.messages[1].blocks, [
+          { kind: "text", text: "我先讀檔案。" },
+          { kind: "tool", name: "Read", detail: "C:\\work\\a.ts" },
+          { kind: "text", text: "看完了。" },
+        ]);
+      }
+    );
+  });
+
+  it("keeps interrupted turns apart instead of merging them into one bubble", async () => {
+    await withClaudeFile(
+      [
+        { type: "user", message: { content: "第一句" } },
+        { type: "user", message: { content: "[Request interrupted by user]" } },
+        { type: "user", message: { content: "第二句" } },
+      ],
+      async (file) => {
+        const transcript = await readTranscript("claude", file);
+        assert.deepEqual(
+          transcript.messages.map((message) => [message.role, message.blocks[0]]),
+          [
+            ["user", { kind: "text", text: "第一句" }],
+            ["notice", { kind: "text", text: "使用者中斷了這次回覆" }],
+            ["user", { kind: "text", text: "第二句" }],
+          ]
+        );
+      }
+    );
+  });
+
+  it("keeps thinking blocks and skips injected meta prompts", async () => {
+    await withClaudeFile(
+      [
+        { type: "user", message: { content: "<system-reminder>忽略我</system-reminder>" } },
+        { type: "user", isMeta: true, message: { content: "也忽略我" } },
+        {
+          type: "assistant",
+          message: { content: [{ type: "thinking", thinking: "先想一下" }] },
+        },
+      ],
+      async (file) => {
+        const transcript = await readTranscript("claude", file);
+        assert.deepEqual(transcript.messages, [
+          {
+            role: "assistant",
+            blocks: [{ kind: "thinking", text: "先想一下" }],
+            timestamp: undefined,
+          },
+        ]);
+      }
+    );
   });
 });
 
