@@ -2,3 +2,5 @@ node_modules/
 out/
 *.vsix
 .claude/
+USAGE.md
+content.md

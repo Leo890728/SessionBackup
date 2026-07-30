@@ -8,3 +8,5 @@ tsconfig.json
 **/*.map
 **/*.vsix
 .gitignore
+USAGE.md
+content.md

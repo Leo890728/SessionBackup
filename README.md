@@ -29,8 +29,6 @@ machines/<machine-id>/resolutions.json
 
 ## 使用方式
 
-逐步操作、側邊欄說明與常見問題請看 [使用說明](USAGE.md)。
-
 1. 按 **F5** 以開發模式啟動，或用 `npm run package` 建立 VSIX。
 2. 執行 **Session Backup: 設定 GitHub 私人儲存庫**。
 3. `sessionBackup.machineId` 留空即可；自動使用「主機名稱 + VS Code 安裝識別碼短雜湊」，
