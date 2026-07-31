@@ -83,6 +83,18 @@
         "title": "Session Backup: 顯示記錄"
       },
       {
+        "command": "sessionBackup.debug.deleteRemoteRepository",
+        "title": "Session Backup: [除錯] 刪除遠端備份儲存庫"
+      },
+      {
+        "command": "sessionBackup.debug.signOutGithub",
+        "title": "Session Backup: [除錯] 登出 GitHub"
+      },
+      {
+        "command": "sessionBackup.debug.deleteLocalData",
+        "title": "Session Backup: [除錯] 刪除本機備份資料"
+      },
+      {
         "command": "sessionBackup.refreshSessions",
         "title": "重新整理",
         "icon": "$(refresh)"
@@ -168,6 +180,18 @@
       ],
       "commandPalette": [
         {
+          "command": "sessionBackup.debug.deleteRemoteRepository",
+          "when": "config.sessionBackup.debugCommands"
+        },
+        {
+          "command": "sessionBackup.debug.signOutGithub",
+          "when": "config.sessionBackup.debugCommands"
+        },
+        {
+          "command": "sessionBackup.debug.deleteLocalData",
+          "when": "config.sessionBackup.debugCommands"
+        },
+        {
           "command": "sessionBackup.refreshRepository",
           "when": "false"
         },
@@ -243,6 +267,12 @@
           "type": "boolean",
           "default": true,
           "description": "commit 前掃描變更檔案中的疑似 API 金鑰/憑證"
+        },
+        "sessionBackup.debugCommands": {
+          "type": "boolean",
+          "default": false,
+          "order": 100,
+          "markdownDescription": "在命令面板顯示除錯／重置命令（搜尋「Session Backup: [除錯]」）。也可以直接從這裡執行：\n\n- [刪除遠端備份儲存庫](command:sessionBackup.debug.deleteRemoteRepository)：永久刪除 GitHub 上的備份庫（含其他電腦的備份歷史）並解除連結\n- [登出 GitHub](command:sessionBackup.debug.signOutGithub)：讓擴充功能忘記目前的 GitHub 帳號，下次備份重新詢問\n- [刪除本機備份資料](command:sessionBackup.debug.deleteLocalData)：清除本機備份儲存庫與擴充功能狀態\n\n這些操作具破壞性且無法復原，執行前都會再次確認；`~/.claude`、`~/.codex` 裡的原始對話檔一律不會被刪除。"
         },
         "sessionBackup.selectedSessions": {
           "type": "array",

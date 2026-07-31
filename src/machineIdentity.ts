@@ -88,6 +88,10 @@ export class MachineIdentityStore {
     this.file = path.join(globalStoragePath, "machine-id.json");
   }
 
+  get storagePath(): string {
+    return this.file;
+  }
+
   async lastUsed(): Promise<string | undefined> {
     try {
       const parsed: IdentityRecord = JSON.parse(await fs.promises.readFile(this.file, "utf8"));

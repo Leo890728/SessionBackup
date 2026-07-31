@@ -12,6 +12,7 @@ import {
   readLegacyIgnoredSessions,
   updateSelectedSessions,
 } from "./config";
+import { registerDebugCommands } from "./debug";
 import { setupRemote } from "./github";
 import { Git } from "./git";
 import {
@@ -335,6 +336,16 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
     vscode.commands.registerCommand("sessionBackup.showLog", () => out.show()),
+    ...registerDebugCommands({
+      context,
+      out,
+      projects,
+      conflicts,
+      vault,
+      repository,
+      tree,
+      refreshStatus: () => updateStatus(context),
+    }),
     vscode.authentication.onDidChangeSessions((event) => {
       if (event.provider.id === "github") {
         repository.refresh();

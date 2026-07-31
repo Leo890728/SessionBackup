@@ -12,12 +12,13 @@ const BACKUP_REPOSITORY_DESCRIPTION =
   "AI session backup (managed by VSCode Session Backup extension)";
 
 export async function getSessionToken(
-  createIfNone: boolean
+  createIfNone: boolean,
+  scopes: readonly string[] = ["repo"]
 ): Promise<string | undefined> {
   try {
     const s = await vscode.authentication.getSession(
       "github",
-      ["repo"],
+      [...scopes],
       createIfNone ? { createIfNone: true } : { silent: true }
     );
     return s?.accessToken;
@@ -155,6 +156,32 @@ export async function findBackupRepositories(
     found.push({ name: repo.name, fullName: repo.full_name, url: repo.clone_url });
   }
   return found;
+}
+
+/**
+ * 永久刪除 GitHub 上的儲存庫。需要 delete_repo scope，
+ * 呼叫端要自己先取得帶該 scope 的 token（一般備份用的 repo scope 不夠）。
+ */
+export async function deleteRepository(token: string, fullName: string): Promise<void> {
+  const res = await api(token, "DELETE", `/repos/${fullName}`);
+  if (res.status === 204) {
+    return;
+  }
+  if (res.status === 403) {
+    throw new Error(
+      `GitHub 拒絕刪除 ${fullName} (HTTP 403)：授權缺少 delete_repo 權限，` +
+        "或這個帳號不是儲存庫的管理者。"
+    );
+  }
+  if (res.status === 404) {
+    throw new Error(
+      `找不到儲存庫 ${fullName} (HTTP 404)：可能已被刪除，或目前的 GitHub 帳號看不到它。`
+    );
+  }
+  throw new Error(
+    `刪除儲存庫失敗 (HTTP ${res.status})：` +
+      JSON.stringify(res.json?.message ?? res.json ?? "")
+  );
 }
 
 export async function setupRemote(out: vscode.OutputChannel): Promise<void> {

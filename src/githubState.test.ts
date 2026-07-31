@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   BackupRepository,
   normalizeRemoteInput,
+  parseGithubRepo,
   selectAutomaticBackupRepo,
 } from "./githubState";
 
@@ -33,6 +34,34 @@ describe("selectAutomaticBackupRepo", () => {
     const personal = repo("shared");
     const org = { ...repo("shared"), fullName: "acme/shared" };
     assert.equal(selectAutomaticBackupRepo([personal, org], "shared"), undefined);
+  });
+});
+
+describe("parseGithubRepo", () => {
+  it("reads owner/repo from the URL forms git writes into origin", () => {
+    for (const url of [
+      "https://github.com/acme/backup.git",
+      "https://github.com/acme/backup",
+      "https://x-access-token@github.com/acme/backup.git",
+      "git@github.com:acme/backup.git",
+      "ssh://git@github.com:2222/acme/backup.git",
+    ]) {
+      assert.equal(parseGithubRepo(` ${url} `)?.fullName, "acme/backup");
+    }
+  });
+
+  // 刪除是不可逆的操作，認錯主機等於刪到別人的儲存庫。
+  it("refuses hosts that merely look like github.com", () => {
+    for (const url of [
+      "https://gitlab.example.com/acme/backup.git",
+      "https://mygithub.com/acme/backup.git",
+      "https://user@mygithub.com/acme/backup.git",
+      "https://github.example.com/acme/backup.git",
+      "https://github.com/acme",
+      "",
+    ]) {
+      assert.equal(parseGithubRepo(url), undefined);
+    }
   });
 });
 

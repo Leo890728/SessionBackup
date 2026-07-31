@@ -27,6 +27,15 @@ export class ProjectMappingRegistry {
     this.file = path.join(globalStoragePath, "project-mappings.json");
   }
 
+  get storagePath(): string {
+    return this.file;
+  }
+
+  /** 檔案被外部刪除（除錯命令清資料）後丟掉記憶體快取，否則下次寫入會把舊資料寫回去。 */
+  reset(): void {
+    this.data = undefined;
+  }
+
   async identifyLocalProject(
     cwd: string | undefined,
     claudeProjectDir: string
