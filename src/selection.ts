@@ -14,6 +14,15 @@ import type { Tool } from "./sessions";
  */
 export type SelectionLevel = "session" | "claudeProject" | "tool";
 
+/**
+ * 「部分選取」提示。VS Code 的 TreeItem checkbox 只有 Checked / Unchecked
+ * （TreeItemCheckboxState 沒有 indeterminate，樹狀圖也不能套 CSS），
+ * 所以子項目勾一半時只能寫在 description 與 tooltip 上，勾選框本身維持兩態。
+ */
+export function partialHint(selected: number, total: number): string | undefined {
+  return selected > 0 && selected < total ? `部分選取 ${selected}/${total}` : undefined;
+}
+
 const LEVEL_ORDER: SelectionLevel[] = ["session", "claudeProject", "tool"];
 
 export interface SelectionTarget {
@@ -133,6 +142,27 @@ export class SelectionSet {
 
   toolSelected(tool: Tool): boolean {
     return this.keys.has(toolKey(tool));
+  }
+
+  /**
+   * 這個工具底下是否有比 tool 更細的規則。樹狀圖用來判斷「部分選取」：
+   * 勾了整個工具時看有沒有排除規則，沒勾時看有沒有個別加選的規則。
+   */
+  hasNarrowerRule(tool: Tool, excluded: boolean): boolean {
+    const prefixes = [`session:${tool}:`];
+    if (tool === "claude") {
+      prefixes.push("claudeProject:");
+    }
+    for (const key of this.keys) {
+      if (key.startsWith("-") !== excluded) {
+        continue;
+      }
+      const body = excluded ? key.slice(1) : key;
+      if (prefixes.some((prefix) => body.startsWith(prefix))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   claudeProjectSelected(projectDir: string): boolean {

@@ -4,6 +4,7 @@ import {
   applyRule,
   applySessionRules,
   claudeProjectKey,
+  partialHint,
   SelectionSet,
   sessionKey,
   toolKey,
@@ -60,6 +61,36 @@ describe("SelectionSet", () => {
     assert.equal(selection.coveredByScope(target, "claudeProject"), false);
     assert.equal(selection.claudeProjectSelected("C--proj"), true);
     assert.equal(selection.toolSelected("claude"), false);
+  });
+
+  it("spots narrower rules under a tool", () => {
+    // 沒勾整個工具時，個別加選的規則代表部分選取。
+    const added = new SelectionSet(["session:codex:c1"]);
+    assert.equal(added.hasNarrowerRule("codex", false), true);
+    assert.equal(added.hasNarrowerRule("claude", false), false);
+
+    // 勾了整個工具時，看的是排除規則。
+    const excluded = new SelectionSet(["tool:claude", "-session:claude:s1"]);
+    assert.equal(excluded.hasNarrowerRule("claude", true), true);
+    assert.equal(excluded.hasNarrowerRule("claude", false), false);
+
+    // claudeProject 也算 tool 底下更細的一層，codex 沒有這一層。
+    const project = new SelectionSet(["claudeProject:C--proj"]);
+    assert.equal(project.hasNarrowerRule("claude", false), true);
+    assert.equal(project.hasNarrowerRule("codex", false), false);
+
+    // tool 規則本身不算「更細」。
+    const whole = new SelectionSet(["tool:claude"]);
+    assert.equal(whole.hasNarrowerRule("claude", false), false);
+  });
+});
+
+describe("partialHint", () => {
+  it("only labels a genuinely half-checked group", () => {
+    assert.equal(partialHint(2, 5), "部分選取 2/5");
+    assert.equal(partialHint(0, 5), undefined);
+    assert.equal(partialHint(5, 5), undefined);
+    assert.equal(partialHint(0, 0), undefined);
   });
 });
 

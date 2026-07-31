@@ -7,6 +7,7 @@ import {
   applyRule,
   applySessionRules,
   claudeProjectKey,
+  partialHint,
   SelectionLevel,
   SelectionSet,
   SelectionTarget,
@@ -148,12 +149,16 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           n.tool === "claude" ? "claude.png" : "codex.png"
         );
         const selected = this.selection.toolSelected(n.tool);
-        item.description = selected ? "全部備份" : undefined;
+        // 工具底下的對話沒有全部載入，數不出 n/m，只判斷有沒有更細的規則。
+        const partial = this.selection.hasNarrowerRule(n.tool, selected);
+        item.description = partial ? "部分選取" : selected ? "全部備份" : undefined;
         item.tooltip =
           `${n.dir}\n\n` +
-          (selected
-            ? "已勾選整個工具：現有與之後新增的對話都會備份"
-            : "勾選以備份這個工具的所有對話（含之後新增的）");
+          (partial
+            ? PARTIAL_TIP + "勾選以備份這個工具的所有對話（含之後新增的）"
+            : selected
+              ? "已勾選整個工具：現有與之後新增的對話都會備份"
+              : "勾選以備份這個工具的所有對話（含之後新增的）");
         item.contextValue = selected ? "toolSelected" : "toolUnselected";
         item.checkboxState = checkbox(selected);
         return item;
@@ -165,14 +170,26 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         );
         item.id = `project:${n.project.dir}`;
         const selected = this.selection.claudeProjectSelected(n.projectDir);
-        item.description = selected
-          ? `${n.project.count} · 已選取`
-          : `${n.project.count}`;
+        const chosen = n.project.sessionIds.filter((id) =>
+          this.selection.includes({
+            tool: "claude",
+            id,
+            claudeProjectDir: n.projectDir,
+          })
+        ).length;
+        const partial = partialHint(chosen, n.project.count);
+        item.description = partial
+          ? `${n.project.count} · ${partial}`
+          : selected
+            ? `${n.project.count} · 已選取`
+            : `${n.project.count}`;
         item.tooltip =
           `${n.project.decoded}\n\n` +
-          (selected
-            ? "已勾選整個專案：現有與之後新增的對話都會備份"
-            : "勾選以備份這個專案的所有對話（含之後新增的）");
+          (partial
+            ? PARTIAL_TIP + "勾選以備份這個專案的所有對話（含之後新增的）"
+            : selected
+              ? "已勾選整個專案：現有與之後新增的對話都會備份"
+              : "勾選以備份這個專案的所有對話（含之後新增的）");
         item.iconPath = vscode.ThemeIcon.Folder;
         item.contextValue = selected ? "projectSelected" : "projectUnselected";
         item.checkboxState = checkbox(selected);
@@ -185,11 +202,17 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         );
         item.id = `date:${n.date}`;
         const sessions = flattenSessions(n.sessions);
-        const selected =
-          sessions.length > 0 &&
-          sessions.every((info) => this.selection.includes(codexTarget(info)));
-        item.description = `${sessions.length} sessions`;
-        item.tooltip = "勾選以備份這一天的所有對話（僅目前這些，不含之後新增的）";
+        const chosen = sessions.filter((info) =>
+          this.selection.includes(codexTarget(info))
+        ).length;
+        const selected = sessions.length > 0 && chosen === sessions.length;
+        const partial = partialHint(chosen, sessions.length);
+        item.description = partial
+          ? `${sessions.length} sessions · ${partial}`
+          : `${sessions.length} sessions`;
+        item.tooltip =
+          (partial ? PARTIAL_TIP : "") +
+          "勾選以備份這一天的所有對話（僅目前這些，不含之後新增的）";
         item.iconPath = new vscode.ThemeIcon("calendar");
         item.contextValue = selected ? "dateSelected" : "dateUnselected";
         item.checkboxState = checkbox(selected);
@@ -206,10 +229,18 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         );
         item.id = `session:${s.file}`;
         const selected = n.status !== "unselected";
-        item.description = `${display.label} · ${s.date} ${s.time}`;
+        // 子 sessions（Codex 接續／子代理）各有自己的規則，可能跟父節點不一致。
+        const subs = n.subs?.length ? flattenSessions(n.subs) : [];
+        const chosenSubs = subs.filter((info) =>
+          this.selection.includes(codexTarget(info))
+        ).length;
+        const partial = partialHint(chosenSubs, subs.length);
+        item.description =
+          `${display.label} · ${s.date} ${s.time}` + (partial ? ` · ${partial}` : "");
         item.tooltip =
           `${s.title}\n\n` +
           `狀態:${display.label} — ${display.detail}\n\n` +
+          (partial ? `子 sessions ${PARTIAL_TIP}` : "") +
           (s.subagent ? `子代理:${s.subagent}\n` : "") +
           (n.subs?.length ? `子 sessions:${n.subs.length} 個\n` : "") +
           `${s.file}\n` +
@@ -476,6 +507,8 @@ function flattenSessions(nodes: TreeNode[]): SessionInfo[] {
   }
   return out;
 }
+
+const PARTIAL_TIP = "部分選取：底下的對話只勾了一部分。\n\n";
 
 function checkbox(selected: boolean): vscode.TreeItemCheckboxState {
   return selected

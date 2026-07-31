@@ -40,6 +40,12 @@ export interface ClaudeProject {
   decoded: string;
   mtime: number;
   count: number;
+  /**
+   * 專案底下每個 session 的 id（= 去掉副檔名的檔名）。樹狀圖用它算「部分選取」，
+   * 不必先把整個專案的 session 讀出來。備份用的 backupId 取自檔案裡的 sessionId，
+   * Claude 兩者一致；萬一不一致也只影響這個提示，不影響備份範圍。
+   */
+  sessionIds: string[];
 }
 
 export interface CodexFile {
@@ -238,6 +244,7 @@ export async function listClaudeProjects(projectsRoot: string): Promise<ClaudePr
       decoded,
       mtime,
       count: files.length,
+      sessionIds: files.map((f) => f.replace(/\.jsonl$/, "")),
     });
   }
   return out.sort((a, b) => b.mtime - a.mtime);
