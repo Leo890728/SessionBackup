@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";
 import { readCodexSessionIndex } from "./codexIndex";
+import { codexMetaCwd, codexSessionMeta, codexThreadId } from "./codexMeta";
 
 export type Tool = "claude" | "codex";
 
@@ -10,7 +11,7 @@ export interface SessionInfo {
   file: string;
   id: string;
   /**
-   * 備份端辨識這個 session 的 id（sessionStore.sessionMetadata 的規則）。
+   * 備份端辨識這個 session 的 id（規則見 codexMeta.codexThreadId）。
    * 選取規則一律用這個值，否則 Codex 子代理檔（id 是自身、備份端用父 thread id）
    * 會勾了卻備份不到。
    */
@@ -386,19 +387,19 @@ export async function codexSessionInfo(cf: CodexFile): Promise<SessionInfo> {
   let parentThreadId: string | undefined;
   let subagent: string | undefined;
   for (const o of lines) {
-    if (o.type === "session_meta" && o.payload) {
-      cwd = o.payload.cwd ?? cwd;
-      // 與 sessionStore.sessionMetadata 同一條規則，確保選取 key 對得上備份端。
-      backupId = o.payload.session_id ?? o.payload.id ?? backupId;
-      if (typeof o.payload.parent_thread_id === "string") {
-        parentThreadId = o.payload.parent_thread_id;
+    const meta = codexSessionMeta(o);
+    if (meta) {
+      cwd = codexMetaCwd(meta) ?? cwd;
+      backupId = codexThreadId(meta) ?? backupId;
+      if (typeof meta.parent_thread_id === "string") {
+        parentThreadId = meta.parent_thread_id;
         // 新版子代理檔的 session_id 是「父」thread id，自身身分要用 payload.id（=檔名 uuid）
-        const own = typeof o.payload.id === "string" ? o.payload.id : undefined;
+        const own = typeof meta.id === "string" ? meta.id : undefined;
         id = own && own !== parentThreadId ? own : cf.id;
       } else {
-        id = o.payload.session_id ?? o.payload.id ?? id;
+        id = codexThreadId(meta) ?? id;
       }
-      subagent = codexSubagentName(o.payload.source);
+      subagent = codexSubagentName(meta.source);
       break;
     }
   }
@@ -720,9 +721,10 @@ async function parseCodexTranscript(
   };
 
   for (const o of lines) {
-    if (o.type === "session_meta" && o.payload) {
-      cwd = o.payload.cwd ?? cwd;
-      id = o.payload.session_id ?? o.payload.id ?? id;
+    const meta = codexSessionMeta(o);
+    if (meta) {
+      cwd = codexMetaCwd(meta) ?? cwd;
+      id = codexThreadId(meta) ?? id;
     }
     if (o.type === "event_msg" && o.payload?.type === "task_complete") {
       if (typeof o.payload.duration_ms === "number") {

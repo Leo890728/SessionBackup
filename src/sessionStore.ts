@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { readCodexSessionIndex } from "./codexIndex";
+import { codexMetaCwd, codexSessionMeta, codexThreadId } from "./codexMeta";
 import { BackupConfig, SourceConfig } from "./config";
 import { SelectionSet } from "./selection";
 import { Tool } from "./sessions";
@@ -492,10 +493,11 @@ async function sessionMetadata(
           return { id, cwd };
         }
       }
-      if (tool === "codex" && value.type === "session_meta" && value.payload) {
-        const id = value.payload.session_id ?? value.payload.id;
-        if (typeof id === "string") {
-          return { id, cwd: value.payload.cwd };
+      if (tool === "codex") {
+        const meta = codexSessionMeta(value);
+        const threadId = meta && codexThreadId(meta);
+        if (meta && threadId !== undefined) {
+          return { id: threadId, cwd: codexMetaCwd(meta) };
         }
       }
     }

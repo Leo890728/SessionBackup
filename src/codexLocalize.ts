@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { codexMetaCwd, codexSessionMeta } from "./codexMeta";
 
 /**
  * Codex 的 session_meta.payload.cwd 是「機器本地」屬性：
@@ -22,9 +23,10 @@ export async function readCodexMetaCwd(file: string): Promise<string | undefined
         continue;
       }
       try {
-        const value = JSON.parse(line);
-        if (value?.type === "session_meta" && typeof value.payload?.cwd === "string") {
-          return value.payload.cwd;
+        const meta = codexSessionMeta(JSON.parse(line));
+        const cwd = meta && codexMetaCwd(meta);
+        if (cwd !== undefined) {
+          return cwd;
         }
       } catch {
         continue;
@@ -59,8 +61,9 @@ export function normalizeCodexMeta(
     }
     try {
       const value = JSON.parse(line);
-      if (value?.type === "session_meta" && value.payload && typeof value.payload === "object") {
-        const payload: Record<string, unknown> = { ...value.payload };
+      const meta = codexSessionMeta(value);
+      if (meta) {
+        const payload: Record<string, unknown> = { ...meta };
         let changed = false;
         if (localCwd && payload.cwd !== localCwd) {
           payload.cwd = localCwd;
