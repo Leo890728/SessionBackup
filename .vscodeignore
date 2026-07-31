@@ -10,3 +10,4 @@ tsconfig.json
 .gitignore
 USAGE.md
 content.md
+REFACTORING_REPORT.md
