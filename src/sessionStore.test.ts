@@ -238,6 +238,53 @@ describe("session selection", () => {
   });
 });
 
+describe("備份端的 codex session_meta 判讀", () => {
+  /** 收集單一 codex rollout 檔，回傳備份端認定的 session id。 */
+  async function collectedIds(payload: Record<string, unknown>): Promise<string[]> {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "codex-meta-store-"));
+    const codex = path.join(root, ".codex");
+    const codexDay = path.join(codex, "sessions", "2026", "07", "14");
+    try {
+      await fs.promises.mkdir(codexDay, { recursive: true });
+      await fs.promises.writeFile(
+        path.join(codexDay, "rollout-2026-07-14T00-00-00-file-uuid.jsonl"),
+        JSON.stringify({ type: "session_meta", payload }) + "\n"
+      );
+      const sessions = await collectLocalSessions({
+        repoPath: path.join(root, "repo"),
+        repoName: "test",
+        machineId: "A",
+        sources: [{ name: "codex", path: codex }],
+        autoBackupMinutes: 0,
+        backupOnStartup: false,
+        maxFileSizeMB: 95,
+        secretScan: false,
+        selectedSessions: ["tool:codex"],
+      });
+      return sessions.map((s) => s.id);
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it("新版用 session_id", async () => {
+    assert.deepEqual(await collectedIds({ session_id: "thread-1", cwd: "C:\\proj" }), ["thread-1"]);
+  });
+
+  it("舊版沒有 session_id 時退回 payload.id（必須與 UI 端同一條規則）", async () => {
+    assert.deepEqual(await collectedIds({ id: "legacy-thread", cwd: "C:\\proj" }), [
+      "legacy-thread",
+    ]);
+  });
+
+  it("子代理檔用父 thread 的 session_id，而不是自身 payload.id", async () => {
+    assert.deepEqual(
+      await collectedIds({ session_id: "parent-1", id: "own-1", parent_thread_id: "parent-1" }),
+      ["parent-1"]
+    );
+  });
+});
+
 describe("isRevisionStored", () => {
   it("is true only after the revision file has been written", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "revision-test-"));
