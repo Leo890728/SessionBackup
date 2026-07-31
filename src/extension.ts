@@ -41,6 +41,17 @@ import { rememberKeepLocal, runSync } from "./sync";
 let timer: NodeJS.Timeout | undefined;
 let statusItem: vscode.StatusBarItem;
 
+/**
+ * 只有這些設定會換掉監看目標或遠端，需要重建 watcher 並重新 fetch。
+ * 選取規則不在其中——它只縮放本機掃描範圍，走輕量的 refresh 就好。
+ */
+const RECONFIGURE_KEYS = [
+  "sessionBackup.sources",
+  "sessionBackup.repoPath",
+  "sessionBackup.repoName",
+  "sessionBackup.machineId",
+];
+
 export function activate(context: vscode.ExtensionContext): void {
   const out = vscode.window.createOutputChannel("Session Backup");
   // 必須在任何備份/同步之前同步設定好，之後 machineIdFromConfig 才拿得到自動值。
@@ -204,7 +215,6 @@ export function activate(context: vscode.ExtensionContext): void {
           return;
         }
         await tree.setSelected(node, true);
-        repository.refresh(false);
         vscode.window.showInformationMessage(
           `Session Backup: 已加入備份 — ${nodeLabel(node)}`
         );
@@ -217,7 +227,6 @@ export function activate(context: vscode.ExtensionContext): void {
           return;
         }
         await tree.setSelected(node, false);
-        repository.refresh(false);
         vscode.window.showInformationMessage(
           `Session Backup: 已移出備份 — ${nodeLabel(node)}（已上傳的舊備份不會被刪除）`
         );
@@ -245,7 +254,6 @@ export function activate(context: vscode.ExtensionContext): void {
       await updateSelectedSessions((current) =>
         current.filter((key) => !remove.has(key))
       );
-      repository.refresh(false);
       tree.reloadSelection();
       vscode.window.showInformationMessage(
         `Session Backup: 已刪除 ${picks.length} 條選取規則。`
@@ -373,10 +381,16 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("sessionBackup.selectedSessions")) {
         tree.reloadSelection();
+        // 這裡是唯一保證 getConfiguration() 讀得到新選取的時機：await update() 回來
+        // 之後設定模型不一定已經發布，搶先掃描會算出舊的「有變動的 sessions」。
+        // 所以勾選造成的重掃一律由這個事件驅動，呼叫端不要自己 refresh。
+        repository.refresh(false);
+      }
+      if (RECONFIGURE_KEYS.some((key) => e.affectsConfiguration(key))) {
+        repository.reconfigure();
       }
       if (e.affectsConfiguration("sessionBackup")) {
         restartTimer(context, out, projects, repository, tree, conflicts, vault);
-        repository.reconfigure();
       }
     })
   );
@@ -391,8 +405,9 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   context.subscriptions.push(
     sessionsView,
+    // 重掃由 onDidChangeConfiguration 驅動（見上），這裡只負責寫入選取規則。
     sessionsView.onDidChangeCheckboxState((e) => {
-      void tree.handleCheckboxChange(e.items).then(() => repository.refresh(false));
+      void tree.handleCheckboxChange(e.items);
     }),
     vscode.window.registerTreeDataProvider("sessionBackup.repository", repository),
     vscode.commands.registerCommand("sessionBackup.refreshSessions", () =>
