@@ -2,6 +2,7 @@ import * as path from "path";
 import { escapeHtml } from "./htmlEscape";
 import { renderMarkdown } from "./markdownHtml";
 import { Transcript, TranscriptBlock, TranscriptMessage } from "./sessions";
+import type { SessionSyncStatus } from "./sessionStatus";
 
 /**
  * 對話預覽的 HTML。與 VS Code API 無關，方便單獨測試轉出來的標記。
@@ -14,10 +15,25 @@ export interface PreviewAssets {
   imageSource?: string;
 }
 
+export interface PreviewState {
+  /** unbacked 代表 manifest 尚無此 session，modified 代表備份後又有新內容。 */
+  status: SessionSyncStatus;
+}
+
+/**
+ * 只有「下次備份會寫入」的兩種狀態要掛橫桿，顏色跟樹狀圖的 diff 圖示同一套：
+ * 新增是綠色、已變更是黃色。其餘狀態不顯示。
+ */
+const DIVIDERS: Partial<Record<SessionSyncStatus, { tone: string; label: string }>> = {
+  unbacked: { tone: "added", label: "對話新增" },
+  modified: { tone: "modified", label: "新對話" },
+};
+
 export function previewHtml(
   transcript: Transcript,
   nonce: string,
-  assets: PreviewAssets = {}
+  assets: PreviewAssets = {},
+  state?: PreviewState
 ): string {
   const toolName = transcript.tool === "claude" ? "Claude Code" : "Codex";
   const turns = transcript.messages.filter((message) => message.role === "user").length;
@@ -37,6 +53,12 @@ export function previewHtml(
     transcript.messages.map((message) => messageHtml(message, avatar)).join("\n") ||
     '<p class="empty">這份對話沒有可顯示的訊息。</p>';
   const imageSource = assets.imageSource ? ` img-src ${assets.imageSource};` : "";
+  const divider = state ? DIVIDERS[state.status] : undefined;
+  const statusDivider = divider
+    ? `<div class="status-divider tone-${divider.tone}" role="separator" aria-label="${divider.label}">
+      <div class="status-divider-inner"><span>${divider.label}</span></div>
+    </div>`
+    : "";
 
   return `<!doctype html>
 <html lang="zh-Hant">
@@ -48,16 +70,19 @@ export function previewHtml(
 </head>
 <body>
   <div class="page tool-${transcript.tool}">
-  <header class="topbar">
-    <div class="topbar-main">
-      <h1>${escapeHtml(transcript.title)}</h1>
-      <p>${meta}</p>
-    </div>
-    <div class="topbar-side">
-      <span class="badge badge-${transcript.tool}">${toolName}</span>
-      <button id="reload" title="重新讀取原始檔">重新整理</button>
-    </div>
-  </header>
+  <div class="sticky-header">
+    <header class="topbar">
+      <div class="topbar-main">
+        <h1>${escapeHtml(transcript.title)}</h1>
+        <p>${meta}</p>
+      </div>
+      <div class="topbar-side">
+        <span class="badge badge-${transcript.tool}">${toolName}</span>
+        <button id="reload" title="重新讀取原始檔">重新整理</button>
+      </div>
+    </header>
+    ${statusDivider}
+  </div>
   <main class="thread">
     ${body}
     <footer class="source">${escapeHtml(path.basename(transcript.file))}</footer>
@@ -175,6 +200,8 @@ const STYLE = `
   --code-text: #f2f0ea;
   --code-border: #35332f;
   --inline-code-bg: #efece2;
+  --added: var(--vscode-gitDecoration-untrackedResourceForeground, #1f7a3d);
+  --modified: var(--vscode-gitDecoration-modifiedResourceForeground, #895503);
 }
 body.vscode-dark, body.vscode-high-contrast {
   --bg: #262624;
@@ -188,6 +215,8 @@ body.vscode-dark, body.vscode-high-contrast {
   --code-text: #eceae4;
   --code-border: #333330;
   --inline-code-bg: #45443f;
+  --added: var(--vscode-gitDecoration-untrackedResourceForeground, #73d68b);
+  --modified: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
 }
 /* 工具色掛在 .page 上而不是 body：body 的 class 由 VS Code 主題控制。 */
 .page.tool-codex { --accent: #7c5cd6; }
@@ -201,10 +230,13 @@ body {
   font-size: 15px;
   line-height: 1.7;
 }
-.topbar {
+.sticky-header {
   position: sticky;
   top: 0;
   z-index: 2;
+  background: var(--bg);
+}
+.topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -213,6 +245,35 @@ body {
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
+.status-divider {
+  padding: 7px 24px 9px;
+  background: var(--bg);
+}
+.status-divider.tone-added { color: var(--added); }
+.status-divider.tone-modified { color: var(--modified); }
+.status-divider-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 46rem;
+  margin: 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: 0.04em;
+}
+.status-divider-inner::before,
+.status-divider-inner::after {
+  content: "";
+  height: 1px;
+  flex: 1 1 auto;
+  background: currentColor;
+  opacity: 0.65;
+}
+.status-divider-inner span { flex: none; white-space: nowrap; }
+body.vscode-high-contrast .status-divider-inner::before,
+body.vscode-high-contrast .status-divider-inner::after { opacity: 1; }
 .topbar h1 { margin: 0; font-size: 15px; font-weight: 600; }
 .topbar p { margin: 2px 0 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 .topbar-side { display: flex; align-items: center; gap: 10px; flex: none; }

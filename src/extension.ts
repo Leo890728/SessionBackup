@@ -419,7 +419,12 @@ export function activate(context: vscode.ExtensionContext): void {
         if (node?.kind !== "session") {
           return;
         }
-        await showSessionPreview(node.info.tool, node.info.file, context.extensionUri);
+        await showSessionPreview(
+          node.info.tool,
+          node.info.file,
+          context.extensionUri,
+          node.status
+        );
       }
     ),
     vscode.commands.registerCommand(

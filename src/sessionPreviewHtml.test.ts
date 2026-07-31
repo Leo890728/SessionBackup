@@ -108,4 +108,38 @@ describe("previewHtml", () => {
     );
     assert.ok(html.includes('<details class="thinking"><summary>思考過程</summary>'));
   });
+
+  it("marks a newly added conversation with a green sticky divider", () => {
+    const added = previewHtml(transcript([]), "n0", {}, { status: "unbacked" });
+    assert.ok(
+      added.includes(
+        '<div class="status-divider tone-added" role="separator" aria-label="對話新增">'
+      )
+    );
+    assert.ok(added.includes("<span>對話新增</span>"));
+    assert.ok(added.includes(".sticky-header {\n  position: sticky;"));
+    assert.ok(added.indexOf('class="topbar"') < added.indexOf('class="status-divider'));
+    assert.ok(added.indexOf('class="status-divider') < added.indexOf('class="thread"'));
+  });
+
+  it("marks a changed conversation with a yellow sticky divider", () => {
+    const modified = previewHtml(transcript([]), "n0", {}, { status: "modified" });
+    assert.ok(
+      modified.includes(
+        '<div class="status-divider tone-modified" role="separator" aria-label="新對話">'
+      )
+    );
+    assert.ok(modified.includes("<span>新對話</span>"));
+  });
+
+  it("leaves out the divider for sessions the next backup will skip", () => {
+    for (const status of ["synced", "unselected", "too-large"] as const) {
+      const html = previewHtml(transcript([]), "n0", {}, { status });
+      assert.equal(html.includes('class="status-divider'), false, status);
+    }
+    assert.equal(
+      previewHtml(transcript([]), "n0").includes('class="status-divider'),
+      false
+    );
+  });
 });

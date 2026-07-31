@@ -3,14 +3,19 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { readTranscript, Tool } from "./sessions";
 import { previewHtml } from "./sessionPreviewHtml";
+import type { SessionSyncStatus } from "./sessionStatus";
 
 /** 同一份對話重複開啟時沿用既有面板，預覽才不會把編輯器塞滿分頁。 */
-const panels = new Map<string, vscode.WebviewPanel>();
+const panels = new Map<
+  string,
+  { panel: vscode.WebviewPanel; status: SessionSyncStatus }
+>();
 
 export async function showSessionPreview(
   tool: Tool,
   file: string,
-  extensionUri: vscode.Uri
+  extensionUri: vscode.Uri,
+  status: SessionSyncStatus
 ): Promise<void> {
   const media = vscode.Uri.joinPath(extensionUri, "media");
   const assets = (webview: vscode.Webview) => ({
@@ -20,11 +25,15 @@ export async function showSessionPreview(
 
   const existing = panels.get(file);
   if (existing) {
-    existing.reveal(existing.viewColumn, false);
-    existing.webview.html = previewHtml(
+    // 同一個檔案可能先從 Sessions 開啟，之後再從變動清單開啟；
+    // 重用面板時也要更新狀態，reload 才不會沿用第一次開啟時的標記。
+    existing.status = status;
+    existing.panel.reveal(existing.panel.viewColumn, false);
+    existing.panel.webview.html = previewHtml(
       await readTranscript(tool, file),
       newNonce(),
-      assets(existing.webview)
+      assets(existing.panel.webview),
+      { status: existing.status }
     );
     return;
   }
@@ -40,7 +49,8 @@ export async function showSessionPreview(
       localResourceRoots: [media],
     }
   );
-  panels.set(file, panel);
+  const state = { panel, status };
+  panels.set(file, state);
   panel.onDidDispose(() => panels.delete(file));
   panel.webview.onDidReceiveMessage(async (message) => {
     if (message?.command === "reload") {
@@ -48,13 +58,16 @@ export async function showSessionPreview(
       panel.webview.html = previewHtml(
         await readTranscript(tool, file),
         newNonce(),
-        assets(panel.webview)
+        assets(panel.webview),
+        { status: state.status }
       );
     } else if (message?.command === "open" && typeof message.path === "string") {
       await openReferencedFile(message.path, message.line, transcript.cwd);
     }
   });
-  panel.webview.html = previewHtml(transcript, newNonce(), assets(panel.webview));
+  panel.webview.html = previewHtml(transcript, newNonce(), assets(panel.webview), {
+    status: state.status,
+  });
 }
 
 /**
