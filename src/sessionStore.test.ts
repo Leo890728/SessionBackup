@@ -283,6 +283,65 @@ describe("備份端的 codex session_meta 判讀", () => {
       ["parent-1"]
     );
   });
+
+  it("子代理檔帶出自身身分，供變動清單還原親子關係", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "codex-subagent-"));
+    const codex = path.join(root, ".codex");
+    const codexDay = path.join(codex, "sessions", "2026", "07", "31");
+    try {
+      await fs.promises.mkdir(codexDay, { recursive: true });
+      // 索引只認得主 thread；子代理檔的 session_id 同樣指向它。
+      await fs.promises.writeFile(
+        path.join(codex, "session_index.jsonl"),
+        JSON.stringify({ id: "thread-1", thread_name: "產生重構評估報告" }) + "\n"
+      );
+      const write = (name: string, payload: Record<string, unknown>) =>
+        fs.promises.writeFile(
+          path.join(codexDay, name),
+          JSON.stringify({ type: "session_meta", payload }) + "\n"
+        );
+      await write("rollout-root.jsonl", {
+        session_id: "thread-1",
+        id: "thread-1",
+        source: "vscode",
+      });
+      await write("rollout-sub.jsonl", {
+        session_id: "thread-1",
+        id: "own-1",
+        parent_thread_id: "thread-1",
+        source: { subagent: { other: "guardian" } },
+      });
+
+      const sessions = await collectLocalSessions({
+        repoPath: path.join(root, "repo"),
+        repoName: "test",
+        machineId: "A",
+        sources: [{ name: "codex", path: codex }],
+        autoBackupMinutes: 0,
+        backupOnStartup: false,
+        maxFileSizeMB: 95,
+        secretScan: false,
+        selectedSessions: ["tool:codex"],
+      });
+
+      const byOwnId = new Map(sessions.map((s) => [s.ownId, s]));
+      assert.deepEqual([...byOwnId.keys()].sort(), ["own-1", "thread-1"]);
+      // 兩個檔案都屬於同一個 thread，選取與備份 key 不變。
+      assert.deepEqual([...new Set(sessions.map((s) => s.id))], ["thread-1"]);
+
+      const main = byOwnId.get("thread-1");
+      assert.equal(main?.title, "產生重構評估報告");
+      assert.equal(main?.parentThreadId, undefined);
+
+      const sub = byOwnId.get("own-1");
+      assert.equal(sub?.parentThreadId, "thread-1");
+      assert.equal(sub?.subagent, "guardian");
+      // 關鍵：子代理不能繼承主 thread 的索引標題，否則清單會出現一排同名項目。
+      assert.equal(sub?.title, undefined);
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("isRevisionStored", () => {

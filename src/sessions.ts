@@ -2,7 +2,13 @@ import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";
 import { readCodexSessionIndex } from "./codexIndex";
-import { codexMetaCwd, codexSessionMeta, codexThreadId } from "./codexMeta";
+import {
+  codexMetaCwd,
+  codexParentThreadId,
+  codexSessionMeta,
+  codexSubagentName,
+  codexThreadId,
+} from "./codexMeta";
 
 export type Tool = "claude" | "codex";
 
@@ -350,26 +356,6 @@ export function codexSessionIdFromFilename(file: string): string {
   return match?.[1] ?? basename;
 }
 
-/** source.subagent 形如 { other: "guardian" }，取第一個字串值當名稱。 */
-function codexSubagentName(source: unknown): string | undefined {
-  const sub = (source as any)?.subagent;
-  if (!sub) {
-    return undefined;
-  }
-  if (typeof sub === "string") {
-    return sub;
-  }
-  if (typeof sub === "object") {
-    for (const v of Object.values(sub)) {
-      if (typeof v === "string") {
-        return v;
-      }
-    }
-    return Object.keys(sub)[0];
-  }
-  return undefined;
-}
-
 export async function codexSessionInfo(cf: CodexFile): Promise<SessionInfo> {
   const cached = titleCache.get(cf.file);
   if (
@@ -391,8 +377,9 @@ export async function codexSessionInfo(cf: CodexFile): Promise<SessionInfo> {
     if (meta) {
       cwd = codexMetaCwd(meta) ?? cwd;
       backupId = codexThreadId(meta) ?? backupId;
-      if (typeof meta.parent_thread_id === "string") {
-        parentThreadId = meta.parent_thread_id;
+      const parent = codexParentThreadId(meta);
+      if (parent !== undefined) {
+        parentThreadId = parent;
         // 新版子代理檔的 session_id 是「父」thread id，自身身分要用 payload.id（=檔名 uuid）
         const own = typeof meta.id === "string" ? meta.id : undefined;
         id = own && own !== parentThreadId ? own : cf.id;

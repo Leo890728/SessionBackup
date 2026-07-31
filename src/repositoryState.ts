@@ -95,6 +95,81 @@ function entryDiffers(
   );
 }
 
+/** 變動清單的一個節點；children 是掛在它底下的 Codex 子代理檔。 */
+export interface ChangedNode {
+  entry: ChangedSession;
+  children: ChangedNode[];
+}
+
+/** 同一個 thread 的所有變動檔案（主 thread + 子代理 + 接續的 rollout）。 */
+export interface ChangedGroup {
+  tool: string;
+  id: string;
+  /** 這個 thread 底下的變動檔案總數 */
+  total: number;
+  /** 通常只有一個 root；接續的 rollout 檔或找不到父節點的孤兒會並列 */
+  roots: ChangedNode[];
+}
+
+/**
+ * 把變動清單依 thread 收合成樹。
+ *
+ * Codex 的子代理檔與主 thread 共用同一個 session_id，攤平列出會讓一次
+ * 「3 個子代理」的對話變成 8 列看起來一樣的項目。改以 ownId/parentThreadId
+ * 還原親子關係，同一個 thread 只佔一列。
+ */
+export function groupChangedSessions(changed: ChangedSession[]): ChangedGroup[] {
+  const groups = new Map<string, ChangedSession[]>();
+  for (const entry of changed) {
+    const key = `${entry.session.tool}:${entry.session.id}`;
+    const bucket = groups.get(key);
+    if (bucket) {
+      bucket.push(entry);
+    } else {
+      groups.set(key, [entry]);
+    }
+  }
+  return [...groups.values()].map((entries) => {
+    const nodes = entries.map((entry) => ({ entry, children: [] as ChangedNode[] }));
+    const byOwnId = new Map<string, ChangedNode>();
+    for (const node of nodes) {
+      const ownId = node.entry.session.ownId;
+      // 同一個 ownId 只認第一個，避免形狀異常的資料互相指來指去。
+      if (ownId && !byOwnId.has(ownId)) {
+        byOwnId.set(ownId, node);
+      }
+    }
+    const roots: ChangedNode[] = [];
+    const parentOf = new Map<ChangedNode, ChangedNode>();
+    /** parent 掛到 node 底下會不會繞回自己（資料異常時的環）。 */
+    const wouldCycle = (node: ChangedNode, parent: ChangedNode): boolean => {
+      for (let up: ChangedNode | undefined = parent; up; up = parentOf.get(up)) {
+        if (up === node) {
+          return true;
+        }
+      }
+      return false;
+    };
+    for (const node of nodes) {
+      const parentId = node.entry.session.parentThreadId;
+      const parent = parentId ? byOwnId.get(parentId) : undefined;
+      // 找不到父檔的孤兒與會成環的節點都升成 root，才不會整串從清單消失。
+      if (parent && parent !== node && !wouldCycle(node, parent)) {
+        parent.children.push(node);
+        parentOf.set(node, parent);
+      } else {
+        roots.push(node);
+      }
+    }
+    return {
+      tool: entries[0].session.tool,
+      id: entries[0].session.id,
+      total: entries.length,
+      roots,
+    };
+  });
+}
+
 /** 下次備份會寫入的 sessions（新增或已變更），供 GitHub Backup 檢視顯示。 */
 export function listChangedSessions(
   sessions: LocalSession[],

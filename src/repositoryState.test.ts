@@ -1,8 +1,11 @@
 import * as assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  ChangedNode,
+  ChangedSession,
   classifyRemoteError,
   classifyRepositoryChanges,
+  groupChangedSessions,
   localSessionsChanged,
   remoteLabel,
 } from "./repositoryState";
@@ -145,6 +148,104 @@ describe("localSessionsChanged", () => {
       localSessionsChanged([local, { ...resumed, hash: "grew" }], twoFiles),
       true
     );
+  });
+});
+
+describe("groupChangedSessions", () => {
+  /** Codex 子代理檔與主 thread 共用 session_id，只有 ownId/parentThreadId 分得出親子。 */
+  const entry = (
+    relativePath: string,
+    extra: Partial<LocalSession> = {}
+  ): ChangedSession => ({
+    change: "added",
+    session: {
+      tool: "codex",
+      id: "thread-1",
+      file: `C:\\codex\\${relativePath}`,
+      relativePath,
+      mtimeMs: 1,
+      size: 10,
+      hash: relativePath,
+      ...extra,
+    },
+  });
+
+  const names = (nodes: ChangedNode[]): unknown =>
+    nodes.map((n) => [n.entry.session.relativePath, names(n.children)]);
+
+  it("把主 thread 與 3 個子代理（各帶 guardian）收成一列", () => {
+    // 對應實際資料：8 個檔案的 session_id 全是主 thread。
+    const groups = groupChangedSessions([
+      entry("root.jsonl", { ownId: "thread-1", title: "產生重構評估報告" }),
+      entry("g0.jsonl", { ownId: "g0", parentThreadId: "thread-1", subagent: "guardian" }),
+      entry("a.jsonl", { ownId: "a", parentThreadId: "thread-1", subagent: "baseline_tests" }),
+      entry("ag.jsonl", { ownId: "ag", parentThreadId: "a", subagent: "guardian" }),
+      entry("b.jsonl", { ownId: "b", parentThreadId: "thread-1", subagent: "complexity" }),
+      entry("bg.jsonl", { ownId: "bg", parentThreadId: "b", subagent: "guardian" }),
+      entry("c.jsonl", { ownId: "c", parentThreadId: "thread-1", subagent: "duplication" }),
+      entry("cg.jsonl", { ownId: "cg", parentThreadId: "c", subagent: "guardian" }),
+    ]);
+
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0].total, 8);
+    assert.deepEqual(names(groups[0].roots), [
+      [
+        "root.jsonl",
+        [
+          ["g0.jsonl", []],
+          ["a.jsonl", [["ag.jsonl", []]]],
+          ["b.jsonl", [["bg.jsonl", []]]],
+          ["c.jsonl", [["cg.jsonl", []]]],
+        ],
+      ],
+    ]);
+  });
+
+  it("單一檔案的 session 仍然是一個 root，不會多長一層", () => {
+    const groups = groupChangedSessions([entry("only.jsonl", { ownId: "thread-1" })]);
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0].total, 1);
+    assert.equal(groups[0].roots.length, 1);
+    assert.equal(groups[0].roots[0].children.length, 0);
+  });
+
+  it("不同 thread 各自成組", () => {
+    const groups = groupChangedSessions([
+      entry("a.jsonl", { id: "thread-1", ownId: "thread-1" }),
+      entry("b.jsonl", { id: "thread-2", ownId: "thread-2" }),
+    ]);
+    assert.deepEqual(
+      groups.map((g) => g.id),
+      ["thread-1", "thread-2"]
+    );
+  });
+
+  it("接續的 rollout 檔沒有 parent，會並列成多個 root", () => {
+    const groups = groupChangedSessions([
+      entry("first.jsonl", { ownId: "thread-1" }),
+      entry("second.jsonl", { ownId: "resumed" }),
+    ]);
+    assert.equal(groups[0].total, 2);
+    assert.equal(groups[0].roots.length, 2);
+  });
+
+  it("父檔不在變動清單裡的孤兒仍然列得出來", () => {
+    const groups = groupChangedSessions([
+      entry("orphan.jsonl", { ownId: "x", parentThreadId: "not-changed", subagent: "guardian" }),
+    ]);
+    assert.equal(groups[0].roots.length, 1);
+    assert.equal(groups[0].roots[0].entry.session.relativePath, "orphan.jsonl");
+  });
+
+  it("互指成環的異常資料不會讓節點從清單消失", () => {
+    const groups = groupChangedSessions([
+      entry("x.jsonl", { ownId: "x", parentThreadId: "y" }),
+      entry("y.jsonl", { ownId: "y", parentThreadId: "x" }),
+    ]);
+    const flatten = (nodes: ChangedNode[]): string[] =>
+      nodes.flatMap((n) => [n.entry.session.relativePath, ...flatten(n.children)]);
+    assert.deepEqual(flatten(groups[0].roots).sort(), ["x.jsonl", "y.jsonl"]);
+    assert.equal(groups[0].total, 2);
   });
 });
 

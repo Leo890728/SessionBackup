@@ -3,7 +3,14 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { readCodexSessionIndex } from "./codexIndex";
-import { codexMetaCwd, codexSessionMeta, codexThreadId } from "./codexMeta";
+import {
+  codexMetaCwd,
+  codexOwnId,
+  codexParentThreadId,
+  codexSessionMeta,
+  codexSubagentName,
+  codexThreadId,
+} from "./codexMeta";
 import { BackupConfig, SourceConfig } from "./config";
 import { SelectionSet } from "./selection";
 import { Tool } from "./sessions";
@@ -36,6 +43,13 @@ export interface LocalSession {
   project?: ProjectRef;
   /** Claude 的 projects/<dir> bucket 名稱，供專案層級的選取規則比對。 */
   claudeProjectDir?: string;
+  /**
+   * Codex 子代理檔的身分。`id` 是所屬 thread（子代理檔為父 thread），這三個
+   * 欄位才分得出同一個 thread 底下的各個檔案，供變動清單收合成樹。
+   */
+  ownId?: string;
+  parentThreadId?: string;
+  subagent?: string;
 }
 
 export interface ManifestSession {
@@ -213,7 +227,9 @@ export async function collectLocalSessions(
             : tool === "codex" && resolveCodexProject
               ? await resolveCodexProject(metadata.cwd)
               : undefined;
-        const codexTitle = codexIndex?.get(metadata.id);
+        // 子代理檔的 session_id 指向父 thread，拿它去查索引會讓同一個 thread 底下
+        // 的每個檔案都掛上主 thread 的標題，變動清單就會出現一排同名項目。
+        const codexTitle = metadata.parentThreadId ? undefined : codexIndex?.get(metadata.id);
         sessions.push({
           tool,
           id: metadata.id,
@@ -227,6 +243,9 @@ export async function collectLocalSessions(
             : {}),
           project,
           claudeProjectDir: tool === "claude" ? projectDir : undefined,
+          ownId: metadata.ownId,
+          parentThreadId: metadata.parentThreadId,
+          subagent: metadata.subagent,
         });
       });
     }
@@ -459,10 +478,15 @@ async function walkJsonl(root: string, visit: (file: string) => Promise<void>): 
   }
 }
 
-async function sessionMetadata(
-  tool: Tool,
-  file: string
-): Promise<{ id: string; cwd?: string }> {
+interface SessionMetadata {
+  id: string;
+  cwd?: string;
+  ownId?: string;
+  parentThreadId?: string;
+  subagent?: string;
+}
+
+async function sessionMetadata(tool: Tool, file: string): Promise<SessionMetadata> {
   const fallback = path.basename(file, ".jsonl");
   let id = fallback;
   let cwd: string | undefined;
@@ -497,7 +521,13 @@ async function sessionMetadata(
         const meta = codexSessionMeta(value);
         const threadId = meta && codexThreadId(meta);
         if (meta && threadId !== undefined) {
-          return { id: threadId, cwd: codexMetaCwd(meta) };
+          return {
+            id: threadId,
+            cwd: codexMetaCwd(meta),
+            ownId: codexOwnId(meta),
+            parentThreadId: codexParentThreadId(meta),
+            subagent: codexSubagentName(meta.source),
+          };
         }
       }
     }

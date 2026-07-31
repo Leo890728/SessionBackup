@@ -12,9 +12,12 @@ import {
 import { selectAutomaticBackupRepo } from "./githubState";
 import { ProjectMappingRegistry } from "./projectMapping";
 import {
+  ChangedGroup,
+  ChangedNode,
   ChangedSession,
   classifyRemoteError,
   classifyRepositoryChanges,
+  groupChangedSessions,
   listChangedSessions,
   localSessionsChanged,
   remoteLabel,
@@ -47,12 +50,22 @@ type RepositoryNode =
       date?: string;
       subject?: string;
     }
-  | { kind: "changes"; count: number }
+  | { kind: "changes"; count: number; files: number }
   | {
       kind: "changedSession";
       displayName: string;
       change: SessionChangeKind;
       session: LocalSession;
+      /** 掛在這個檔案底下的 Codex 子代理檔 */
+      children: RepositoryNode[];
+      /** 含自己與所有子代理的檔案數；1 表示不需要顯示成一個 thread */
+      total: number;
+    }
+  | {
+      kind: "changedThread";
+      displayName: string;
+      total: number;
+      children: RepositoryNode[];
     }
   | { kind: "overflow"; rest: number }
   | { kind: "conflicts"; count: number }
@@ -68,12 +81,12 @@ export class RepositoryTreeProvider
   private readonly emitter = new vscode.EventEmitter<RepositoryNode | undefined>();
   readonly onDidChangeTreeData = this.emitter.event;
   private node: RepositoryNode = { kind: "checking" };
-  private changed: {
-    displayName: string;
-    change: SessionChangeKind;
-    session: LocalSession;
-  }[] = [];
+  /** 變動清單的頂層列（每個 thread 一列，單檔 session 就是它自己）。 */
+  private changed: RepositoryNode[] = [];
+  /** 變動檔案總數（不是列數）。 */
   private changedTotal = 0;
+  /** 已經建成節點的檔案數，用來算 overflow。 */
+  private changedShown = 0;
   private watchers: vscode.FileSystemWatcher[] = [];
   private scanTimer: NodeJS.Timeout | undefined;
   private readonly remoteTimer: NodeJS.Timeout;
@@ -227,18 +240,36 @@ export class RepositoryTreeProvider
         "有變動的 sessions",
         vscode.TreeItemCollapsibleState.Expanded
       );
-      item.description = String(node.count);
+      item.description =
+        node.files === node.count ? String(node.count) : `${node.count}（${node.files} 個檔案）`;
       item.tooltip = "下次備份會寫入這些 sessions";
       item.iconPath = new vscode.ThemeIcon("request-changes");
       return item;
     }
+    if (node.kind === "changedThread") {
+      const item = new vscode.TreeItem(
+        node.displayName,
+        vscode.TreeItemCollapsibleState.Collapsed
+      );
+      item.description = `${node.total} 個檔案`;
+      item.tooltip = `${node.displayName}\n同一個 thread 的 ${node.total} 個 rollout 檔`;
+      item.iconPath = new vscode.ThemeIcon("comment-discussion");
+      return item;
+    }
     if (node.kind === "changedSession") {
       const added = node.change === "added";
-      const item = new vscode.TreeItem(node.displayName);
-      item.description = added ? "新增" : "已變更";
+      const item = new vscode.TreeItem(
+        node.displayName,
+        node.children.length
+          ? vscode.TreeItemCollapsibleState.Collapsed
+          : vscode.TreeItemCollapsibleState.None
+      );
+      // 子代理是跟著主 thread 一起備份的，所以檔案數掛在 thread 這一列上。
+      item.description = node.total > 1 ? `${node.total} 個檔案` : added ? "新增" : "已變更";
       item.tooltip =
         `${node.displayName}\n` +
         (added ? "尚未備份過" : "備份後有新內容") +
+        (node.total > 1 ? `\n含子代理共 ${node.total} 個檔案` : "") +
         `\n${node.session.file}`;
       item.iconPath = new vscode.ThemeIcon(
         added ? "diff-added" : "diff-modified",
@@ -258,7 +289,7 @@ export class RepositoryTreeProvider
             info: {
               tool: node.session.tool,
               file: node.session.file,
-              id: node.session.id,
+              id: node.session.ownId ?? node.session.id,
               backupId: node.session.id,
               mtime: node.session.mtimeMs,
               size: node.session.size,
@@ -333,17 +364,20 @@ export class RepositoryTreeProvider
   async getChildren(node?: RepositoryNode): Promise<RepositoryNode[]> {
     if (node) {
       if (node.kind === "changes") {
-        const items: RepositoryNode[] = this.changed.map((c) => ({
-          kind: "changedSession" as const,
-          ...c,
-        }));
-        if (this.changedTotal > this.changed.length) {
+        const items: RepositoryNode[] = [...this.changed];
+        if (this.changedTotal > this.changedShown) {
           items.push({
             kind: "overflow",
-            rest: this.changedTotal - this.changed.length,
+            rest: this.changedTotal - this.changedShown,
           });
         }
         return items;
+      }
+      if (node.kind === "changedThread") {
+        return node.children;
+      }
+      if (node.kind === "changedSession") {
+        return node.children;
       }
       if (node.kind === "conflicts") {
         const records = await this.conflicts.list();
@@ -353,7 +387,11 @@ export class RepositoryTreeProvider
     }
     const roots: RepositoryNode[] = [this.node];
     if (this.changedTotal > 0 && this.node.kind === "action") {
-      roots.push({ kind: "changes", count: this.changedTotal });
+      roots.push({
+        kind: "changes",
+        count: this.changed.length,
+        files: this.changedTotal,
+      });
     }
     const conflictCount = (await this.conflicts.list()).length;
     if (conflictCount > 0 && this.node.kind !== "checking") {
@@ -533,15 +571,57 @@ export class RepositoryTreeProvider
     };
   }
 
-  /** 解析顯示標題（僅前 MAX_CHANGED_SHOWN 筆，避免大量檔案讀取）。 */
+  /**
+   * 收合成 thread 樹並解析顯示標題。
+   *
+   * 只建到 MAX_CHANGED_SHOWN 個檔案為止（標題要讀檔），但一律以 thread 為單位
+   * 取整組，不會把一個 thread 切一半。
+   */
   private async setChanged(changed: ChangedSession[]): Promise<void> {
     this.changedTotal = changed.length;
-    this.changed = await Promise.all(
-      changed.slice(0, MAX_CHANGED_SHOWN).map(async (c) => ({
-        change: c.change,
-        session: c.session,
-        displayName: await sessionDisplayName(c.session),
-      }))
+    const rows: RepositoryNode[] = [];
+    let shown = 0;
+    for (const group of groupChangedSessions(changed)) {
+      if (shown >= MAX_CHANGED_SHOWN) {
+        break;
+      }
+      rows.push(await this.buildGroupNode(group));
+      shown += group.total;
+    }
+    this.changed = rows;
+    this.changedShown = shown;
+  }
+
+  private async buildChangedNode(node: ChangedNode, total: number): Promise<RepositoryNode> {
+    const children = await Promise.all(
+      node.children.map((child) => this.buildChangedNode(child, 1))
     );
+    return {
+      kind: "changedSession",
+      change: node.entry.change,
+      session: node.entry.session,
+      displayName: await sessionDisplayName(node.entry.session),
+      children,
+      total,
+    };
+  }
+
+  private async buildGroupNode(group: ChangedGroup): Promise<RepositoryNode> {
+    const roots = await Promise.all(
+      group.roots.map((root) => this.buildChangedNode(root, group.total))
+    );
+    // 常見情形：一個主 thread 檔，子代理掛在它底下——直接用它當這一列，
+    // 點擊仍然預覽得到主 thread。接續的 rollout 檔會有多個 root，
+    // 這時才需要一個純分組列把它們收在一起。
+    if (roots.length === 1) {
+      return roots[0];
+    }
+    const first = roots[0];
+    return {
+      kind: "changedThread",
+      displayName: first?.kind === "changedSession" ? first.displayName : group.id,
+      total: group.total,
+      children: roots,
+    };
   }
 }
