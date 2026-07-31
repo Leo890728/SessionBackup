@@ -41,7 +41,9 @@ export function getConfig(): BackupConfig {
   }));
   return {
     repoPath,
-    repoName: c.get("repoName", "agent-session-backup"),
+    // 使用者在設定 UI 清空欄位時拿到的是空字串而不是 undefined，
+    // c.get 的預設值救不到；空名稱會讓自動探索永遠比對不到儲存庫。
+    repoName: c.get<string>("repoName", "").trim() || "agent-session-backup",
     // 留空代表交給 machineIdFromConfig 用自動產生的值（hostname + 安裝識別碼雜湊）。
     machineId: c.get<string>("machineId", "").trim(),
     sources,
