@@ -577,6 +577,29 @@ export function interruptionNotice(text: string): string | undefined {
   return INTERRUPTED.test(text) ? "使用者中斷了這次回覆" : undefined;
 }
 
+/** 兩種工具各自解析出來的結果，差別只在怎麼讀，讀完的形狀是一樣的。 */
+interface ParsedTranscript {
+  title: string;
+  cwd?: string;
+  messages: TranscriptMessage[];
+}
+
+/** 使用者訊息＝IDE 注入的上下文卡片，後面接真正打出來的問題。 */
+function userMessage(
+  contexts: { label: string; detail: string }[],
+  text: string,
+  timestamp?: string
+): TranscriptMessage {
+  return {
+    role: "user",
+    blocks: [
+      ...contexts.map((context) => ({ kind: "context" as const, ...context })),
+      { kind: "text" as const, text },
+    ],
+    timestamp,
+  };
+}
+
 /**
  * 把 JSONL 轉成訊息串，預覽與 Markdown 匯出共用同一份解析結果。
  * 連續的同角色內容會併成一則訊息：工具呼叫因此留在觸發它的那次回覆裡，
@@ -584,8 +607,21 @@ export function interruptionNotice(text: string): string | undefined {
  */
 export async function readTranscript(tool: Tool, file: string): Promise<Transcript> {
   const lines = await readAllLines(file);
+  const parsed =
+    tool === "claude"
+      ? parseClaudeTranscript(lines)
+      : await parseCodexTranscript(lines, file);
+  return {
+    tool,
+    file,
+    title: cleanTitle(parsed.title),
+    cwd: parsed.cwd,
+    messages: parsed.messages,
+  };
+}
+
+function parseClaudeTranscript(lines: any[]): ParsedTranscript {
   const messages: TranscriptMessage[] = [];
-  let title = tool === "claude" ? claudeAiTitle(lines) ?? "(無標題)" : "(無標題)";
   let cwd: string | undefined;
 
   /**
@@ -601,149 +637,141 @@ export async function readTranscript(tool: Tool, file: string): Promise<Transcri
     messages.push({ role: "assistant", blocks: [block], timestamp });
   };
 
-  if (tool === "claude") {
-    for (const o of lines) {
-      if (!cwd && typeof o.cwd === "string") {
-        cwd = o.cwd;
-      }
-      if (o.type === "user" && o.message && o.isMeta !== true) {
-        const t = claudeText(o.message.content);
-        if (t && claudeUserOk(t)) {
-          const notice = interruptionNotice(t);
-          if (notice) {
-            messages.push({
-              role: "notice",
-              blocks: [{ kind: "text", text: notice }],
-              timestamp: o.timestamp,
-            });
-          } else {
-            const { contexts, rest } = extractUserContext(t);
-            // 只有 IDE 上下文、沒有真正提問的訊息不顯示。
-            if (rest) {
-              messages.push({
-                role: "user",
-                blocks: [
-                  ...contexts.map((context) => ({ kind: "context" as const, ...context })),
-                  { kind: "text" as const, text: rest },
-                ],
-                timestamp: o.timestamp,
-              });
-            }
-          }
-        }
-      } else if (o.type === "assistant" && o.message && Array.isArray(o.message.content)) {
-        for (const c of o.message.content) {
-          if (c?.type === "text" && typeof c.text === "string" && c.text.trim()) {
-            appendAssistant({ kind: "text", text: c.text }, o.timestamp);
-          } else if (
-            c?.type === "thinking" &&
-            typeof c.thinking === "string" &&
-            c.thinking.trim()
-          ) {
-            // thinking 的明文不一定會被寫進紀錄（只留加密的 signature），空的就跳過。
-            appendAssistant({ kind: "thinking", text: c.thinking }, o.timestamp);
-          } else if (c?.type === "tool_use" && c.name) {
-            appendAssistant(
-              { kind: "tool", name: c.name, detail: toolDetail(c.input) },
-              o.timestamp
-            );
-          }
-        }
-      }
+  for (const o of lines) {
+    if (!cwd && typeof o.cwd === "string") {
+      cwd = o.cwd;
     }
-  } else {
-    let id = codexSessionIdFromFilename(file);
-    // Codex 一輪回覆會夾雜數次進度說明，最後一則才是答案；
-    // 先收集起來，等這一輪結束（task_complete）再決定哪些要收合。
-    let pending: TranscriptBlock[] = [];
-    let pendingAt: string | undefined;
-    let durationMs: number | undefined;
-
-    const flushTurn = () => {
-      if (pending.length) {
-        const lastText = findLastTextIndex(pending);
-        const work = lastText >= 0 ? pending.slice(0, lastText) : pending;
-        const answer = lastText >= 0 ? pending.slice(lastText) : [];
-        messages.push({
-          role: "assistant",
-          blocks: [
-            ...(work.length ? [{ kind: "work" as const, durationMs, items: work }] : []),
-            ...answer,
-          ],
-          timestamp: pendingAt,
-        });
-      }
-      pending = [];
-      pendingAt = undefined;
-      durationMs = undefined;
-    };
-    const collect = (block: TranscriptBlock, timestamp?: string) => {
-      pending.push(block);
-      pendingAt = pendingAt ?? timestamp;
-    };
-
-    for (const o of lines) {
-      if (o.type === "session_meta" && o.payload) {
-        cwd = o.payload.cwd ?? cwd;
-        id = o.payload.session_id ?? o.payload.id ?? id;
-      }
-      if (o.type === "event_msg" && o.payload?.type === "task_complete") {
-        if (typeof o.payload.duration_ms === "number") {
-          durationMs = o.payload.duration_ms;
-        }
-        flushTurn();
-        continue;
-      }
-      if (o.type !== "response_item" || !o.payload) {
-        continue;
-      }
-      const p = o.payload;
-      if (p.type === "message" && p.role === "user") {
-        const t = codexTexts(p.content, "input_text");
-        if (t && codexUserOk(t)) {
+    if (o.type === "user" && o.message && o.isMeta !== true) {
+      const t = claudeText(o.message.content);
+      if (t && claudeUserOk(t)) {
+        const notice = interruptionNotice(t);
+        if (notice) {
+          messages.push({
+            role: "notice",
+            blocks: [{ kind: "text", text: notice }],
+            timestamp: o.timestamp,
+          });
+        } else {
           const { contexts, rest } = extractUserContext(t);
+          // 只有 IDE 上下文、沒有真正提問的訊息不顯示。
           if (rest) {
-            // 沒有 task_complete 的舊紀錄：遇到下一次提問就把上一輪收掉。
-            flushTurn();
-            messages.push({
-              role: "user",
-              blocks: [
-                ...contexts.map((context) => ({ kind: "context" as const, ...context })),
-                { kind: "text" as const, text: rest },
-              ],
-              timestamp: o.timestamp,
-            });
+            messages.push(userMessage(contexts, rest, o.timestamp));
           }
         }
-      } else if (p.type === "message" && p.role === "assistant") {
-        const t = codexTexts(p.content, "output_text");
-        if (t) {
-          collect({ kind: "text", text: t }, o.timestamp);
-        }
-      } else if (p.type === "reasoning") {
-        const t = codexTexts(p.summary, "summary_text");
-        if (t) {
-          collect({ kind: "thinking", text: t }, o.timestamp);
-        }
-      } else if (p.type === "function_call" && p.name) {
-        collect(
-          { kind: "tool", name: p.name, detail: toolDetail(safeJson(p.arguments)) },
-          o.timestamp
-        );
-      } else if (p.type === "local_shell_call" && p.action?.command) {
-        collect({ kind: "tool", name: "shell", detail: toolDetail(p.action.command) }, o.timestamp);
       }
-    }
-    flushTurn();
-    const codexRoot = codexRootFromSessionFile(file);
-    if (codexRoot) {
-      title =
-        (await readCodexSessionIndex(path.join(codexRoot, "session_index.jsonl"))).get(id)
-          ?.thread_name ?? "(無標題)";
+    } else if (o.type === "assistant" && o.message && Array.isArray(o.message.content)) {
+      for (const c of o.message.content) {
+        if (c?.type === "text" && typeof c.text === "string" && c.text.trim()) {
+          appendAssistant({ kind: "text", text: c.text }, o.timestamp);
+        } else if (
+          c?.type === "thinking" &&
+          typeof c.thinking === "string" &&
+          c.thinking.trim()
+        ) {
+          // thinking 的明文不一定會被寫進紀錄（只留加密的 signature），空的就跳過。
+          appendAssistant({ kind: "thinking", text: c.thinking }, o.timestamp);
+        } else if (c?.type === "tool_use" && c.name) {
+          appendAssistant(
+            { kind: "tool", name: c.name, detail: toolDetail(c.input) },
+            o.timestamp
+          );
+        }
+      }
     }
   }
 
-  return { tool, file, title: cleanTitle(title), cwd, messages };
+  return { title: claudeAiTitle(lines) ?? "(無標題)", cwd, messages };
+}
+
+async function parseCodexTranscript(
+  lines: any[],
+  file: string
+): Promise<ParsedTranscript> {
+  const messages: TranscriptMessage[] = [];
+  let cwd: string | undefined;
+  let id = codexSessionIdFromFilename(file);
+  // Codex 一輪回覆會夾雜數次進度說明，最後一則才是答案；
+  // 先收集起來，等這一輪結束（task_complete）再決定哪些要收合。
+  let pending: TranscriptBlock[] = [];
+  let pendingAt: string | undefined;
+  let durationMs: number | undefined;
+
+  const flushTurn = () => {
+    if (pending.length) {
+      const lastText = findLastTextIndex(pending);
+      const work = lastText >= 0 ? pending.slice(0, lastText) : pending;
+      const answer = lastText >= 0 ? pending.slice(lastText) : [];
+      messages.push({
+        role: "assistant",
+        blocks: [
+          ...(work.length ? [{ kind: "work" as const, durationMs, items: work }] : []),
+          ...answer,
+        ],
+        timestamp: pendingAt,
+      });
+    }
+    pending = [];
+    pendingAt = undefined;
+    durationMs = undefined;
+  };
+  const collect = (block: TranscriptBlock, timestamp?: string) => {
+    pending.push(block);
+    pendingAt = pendingAt ?? timestamp;
+  };
+
+  for (const o of lines) {
+    if (o.type === "session_meta" && o.payload) {
+      cwd = o.payload.cwd ?? cwd;
+      id = o.payload.session_id ?? o.payload.id ?? id;
+    }
+    if (o.type === "event_msg" && o.payload?.type === "task_complete") {
+      if (typeof o.payload.duration_ms === "number") {
+        durationMs = o.payload.duration_ms;
+      }
+      flushTurn();
+      continue;
+    }
+    if (o.type !== "response_item" || !o.payload) {
+      continue;
+    }
+    const p = o.payload;
+    if (p.type === "message" && p.role === "user") {
+      const t = codexTexts(p.content, "input_text");
+      if (t && codexUserOk(t)) {
+        const { contexts, rest } = extractUserContext(t);
+        if (rest) {
+          // 沒有 task_complete 的舊紀錄：遇到下一次提問就把上一輪收掉。
+          flushTurn();
+          messages.push(userMessage(contexts, rest, o.timestamp));
+        }
+      }
+    } else if (p.type === "message" && p.role === "assistant") {
+      const t = codexTexts(p.content, "output_text");
+      if (t) {
+        collect({ kind: "text", text: t }, o.timestamp);
+      }
+    } else if (p.type === "reasoning") {
+      const t = codexTexts(p.summary, "summary_text");
+      if (t) {
+        collect({ kind: "thinking", text: t }, o.timestamp);
+      }
+    } else if (p.type === "function_call" && p.name) {
+      collect(
+        { kind: "tool", name: p.name, detail: toolDetail(safeJson(p.arguments)) },
+        o.timestamp
+      );
+    } else if (p.type === "local_shell_call" && p.action?.command) {
+      collect({ kind: "tool", name: "shell", detail: toolDetail(p.action.command) }, o.timestamp);
+    }
+  }
+  flushTurn();
+
+  const codexRoot = codexRootFromSessionFile(file);
+  const title = codexRoot
+    ? (await readCodexSessionIndex(path.join(codexRoot, "session_index.jsonl"))).get(id)
+        ?.thread_name ?? "(無標題)"
+    : "(無標題)";
+  return { title, cwd, messages };
 }
 
 function findLastTextIndex(blocks: TranscriptBlock[]): number {
