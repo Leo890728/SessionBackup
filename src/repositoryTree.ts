@@ -13,10 +13,12 @@ import { selectAutomaticBackupRepo } from "./githubState";
 import { ProjectMappingRegistry } from "./projectMapping";
 import {
   ChangedSession,
+  classifyRemoteError,
   classifyRepositoryChanges,
   listChangedSessions,
   localSessionsChanged,
   remoteLabel,
+  RemoteErrorKind,
   RepositoryChangeState,
   SessionChangeKind,
 } from "./repositoryState";
@@ -33,7 +35,7 @@ type RepositoryNode =
   | { kind: "checking" }
   | { kind: "connect" }
   | { kind: "publish"; remote: string }
-  | { kind: "error"; message: string }
+  | { kind: "error"; message: string; cause: RemoteErrorKind }
   | {
       kind: "action";
       state: Exclude<RepositoryChangeState, "synced">;
@@ -143,17 +145,48 @@ export class RepositoryTreeProvider
       return item;
     }
     if (node.kind === "error") {
-      const item = new vscode.TreeItem("無法檢查備份狀態");
-      item.description = "按一下重試";
-      item.tooltip = node.message;
+      // 只有連線問題重試才有意義；遠端不見或授權失效時要給對應的出口，
+      // 否則使用者只能一直按一個永遠不會成功的「重試」。
+      const action = {
+        "not-found": {
+          label: "找不到遠端備份儲存庫",
+          description: "按一下重新連接",
+          hint:
+            "遠端儲存庫可能已被刪除或改名，也可能是這個帳號沒有存取權。\n" +
+            "按一下選擇要連接的備份儲存庫。",
+          command: "sessionBackup.setupRemote",
+          icon: "repo",
+        },
+        auth: {
+          label: "GitHub 授權已失效",
+          description: "按一下重新登入",
+          hint: "登入過期、被移出組織，或組織啟用了 SAML SSO 需要重新授權。",
+          command: "sessionBackup.signInGithub",
+          icon: "key",
+        },
+        network: {
+          label: "無法連線到遠端",
+          description: "按一下重試",
+          hint: "看起來是網路或代理伺服器問題，稍後會自動再試一次。",
+          command: "sessionBackup.refreshRepository",
+          icon: "cloud-offline",
+        },
+        unknown: {
+          label: "無法檢查備份狀態",
+          description: "按一下重試",
+          hint: "",
+          command: "sessionBackup.refreshRepository",
+          icon: "warning",
+        },
+      }[node.cause];
+      const item = new vscode.TreeItem(action.label);
+      item.description = action.description;
+      item.tooltip = (action.hint ? action.hint + "\n\n" : "") + node.message;
       item.iconPath = new vscode.ThemeIcon(
-        "warning",
+        action.icon,
         new vscode.ThemeColor("list.warningForeground")
       );
-      item.command = {
-        command: "sessionBackup.refreshRepository",
-        title: "重新檢查",
-      };
+      item.command = { command: action.command, title: action.label };
       return item;
     }
     if (node.kind === "action") {
@@ -184,6 +217,7 @@ export class RepositoryTreeProvider
       item.description = action.description;
       item.tooltip = `${action.tooltip}\nGitHub：${remoteLabel(node.remote)}`;
       item.iconPath = new vscode.ThemeIcon(action.icon);
+      item.contextValue = "connected";
       item.command = { command: action.command, title: action.label };
       return item;
     }
@@ -278,10 +312,13 @@ export class RepositoryTreeProvider
 
     const item = new vscode.TreeItem("已同步");
     item.description = remoteLabel(node.remote);
+    // 「換一個備份儲存庫」只有在這裡找得到入口：設定裡的 repoName 改了不會動到 origin。
+    item.contextValue = "connected";
     item.tooltip =
       `GitHub：${node.remote}` +
       (node.date ? `\n最近備份：${node.date}` : "") +
-      (node.subject ? `\n${node.subject}` : "");
+      (node.subject ? `\n${node.subject}` : "") +
+      "\n\n要改連到其他備份儲存庫，請用右側的「重新連接儲存庫」。";
     item.iconPath = new vscode.ThemeIcon(
       "pass-filled",
       new vscode.ThemeColor("testing.iconPassed")
@@ -377,7 +414,7 @@ export class RepositoryTreeProvider
     } catch (error: any) {
       const message = error?.message ?? String(error);
       this.out.appendLine("檢查備份狀態失敗：" + message);
-      this.node = { kind: "error", message };
+      this.node = { kind: "error", message, cause: classifyRemoteError(message) };
       await this.setChanged([]);
     } finally {
       this.scanning = false;

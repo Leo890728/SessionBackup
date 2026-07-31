@@ -25,7 +25,13 @@ export class Git {
 
   run(args: string[], allowFail = false): Promise<GitResult> {
     return new Promise((resolve, reject) => {
-      const child = spawn("git", args, { cwd: this.repoPath, windowsHide: true });
+      const child = spawn("git", args, {
+        cwd: this.repoPath,
+        windowsHide: true,
+        // 子行程沒有 terminal，git 若試著在終端機問帳密只會卡住直到逾時。
+        // 這不影響 credential manager／SSH agent 那類非終端機的認證方式。
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      });
       let stdout = "";
       let stderr = "";
       child.stdout.on("data", (d) => (stdout += d));
@@ -83,6 +89,36 @@ export class Git {
       await this.run(["remote", "set-url", "origin", url]);
     } else {
       await this.run(["remote", "add", "origin", url]);
+    }
+  }
+
+  /** 連線測試：不動 .git/config，所以打錯的 URL 不會留下痕跡。 */
+  async testRemote(url: string, authHeader?: string): Promise<GitResult> {
+    const extra = authHeader ? ["-c", "http.extraHeader=" + authHeader] : [];
+    return this.run([...extra, "ls-remote", "--heads", url], true);
+  }
+
+  /**
+   * 本機與遠端是否同源。備份庫重建後兩邊會是完全不相干的歷史，
+   * 此時 rebase 一定會在各機器的 manifest.json 撞 add/add 衝突，
+   * 必須先問過使用者改用遠端重建，而不是讓同步在半路炸掉。
+   */
+  async hasCommonHistory(remoteRef: string): Promise<boolean> {
+    const head = await this.run(["rev-parse", "--verify", "HEAD"], true);
+    if (head.code !== 0) {
+      return true; // 本機還沒有 commit，直接採用遠端即可，不算分叉
+    }
+    const base = await this.run(["merge-base", "HEAD", remoteRef], true);
+    return base.code === 0;
+  }
+
+  /** 丟掉本機歷史，改以遠端分支為準（本機 session 原檔不受影響）。 */
+  async resetToRemote(branch: string): Promise<void> {
+    const checkout = await this.run(["checkout", "-B", branch, `origin/${branch}`], true);
+    if (checkout.code !== 0) {
+      throw new Error(
+        (checkout.stderr || checkout.stdout).trim() || "以遠端重建本機備份庫失敗"
+      );
     }
   }
 
@@ -161,6 +197,13 @@ export class Git {
     }
     if (localBranch !== branch) {
       await this.run(["branch", "-M", branch]);
+    }
+    // 先講清楚，否則使用者只會看到 rebase 在 manifest 上的衝突訊息，看不出真正的原因。
+    if (!(await this.hasCommonHistory(remoteRef))) {
+      throw new Error(
+        "本機備份庫與遠端的歷史不相干（遠端儲存庫可能被刪除後重建）。" +
+          "請執行「Session Backup: 連接備份儲存庫」重新連接，並選擇以遠端為準重建本機備份庫。"
+      );
     }
     const rebase = await this.run(["rebase", remoteRef], true);
     if (rebase.code !== 0) {

@@ -58,6 +58,15 @@
         "title": "Session Backup: 連接備份儲存庫"
       },
       {
+        "command": "sessionBackup.reconnectRemote",
+        "title": "Session Backup: 重新連接備份儲存庫",
+        "icon": "$(repo)"
+      },
+      {
+        "command": "sessionBackup.signInGithub",
+        "title": "Session Backup: 重新登入 GitHub"
+      },
+      {
         "command": "sessionBackup.publishGithub",
         "title": "Session Backup: 備份至遠端儲存庫"
       },
@@ -147,6 +156,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "sessionBackup.reconnectRemote",
+          "when": "view == sessionBackup.repository && viewItem == connected",
+          "group": "inline"
+        },
         {
           "command": "sessionBackup.exportSession",
           "when": "view == sessionBackup.sessions && viewItem =~ /^session/",
@@ -240,7 +254,7 @@
         "sessionBackup.repoName": {
           "type": "string",
           "default": "agent-session-backup",
-          "description": "在 GitHub 上建立的私人儲存庫名稱"
+          "markdownDescription": "**建立或尋找**備份儲存庫時使用的名稱：尚未連接時用它在 GitHub 上比對既有的備份庫，需要新建時也用它當預設名稱。\n\n⚠️ **已經連接之後，改這個欄位不會更換儲存庫** —— 實際使用的位置記在本機備份庫的 git remote 裡。要改連到別的儲存庫，請執行 [重新連接備份儲存庫](command:sessionBackup.reconnectRemote)，或在 GitHub Backup 側欄的狀態項目上按 $(repo)。\n\n留空時使用預設值 `agent-session-backup`。"
         },
         "sessionBackup.machineId": {
           "type": "string",

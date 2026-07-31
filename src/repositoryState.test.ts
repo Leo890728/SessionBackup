@@ -1,6 +1,7 @@
 import * as assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  classifyRemoteError,
   classifyRepositoryChanges,
   localSessionsChanged,
   remoteLabel,
@@ -14,6 +15,51 @@ describe("remoteLabel", () => {
 
   it("formats SSH GitHub remotes", () => {
     assert.equal(remoteLabel("git@github.com:example/backup.git"), "example/backup");
+  });
+});
+
+describe("classifyRemoteError", () => {
+  it("recognises a remote that is gone or mistyped", () => {
+    for (const message of [
+      "remote: Repository not found.\nfatal: repository 'https://github.com/me/.backup.git/' not found",
+      "fatal: '/srv/git/backup.git' does not appear to be a git repository",
+    ]) {
+      assert.equal(classifyRemoteError(message), "not-found");
+    }
+  });
+
+  it("recognises authorization failures", () => {
+    for (const message of [
+      "remote: Invalid username or password.\nfatal: Authentication failed for 'https://github.com/me/backup.git/'",
+      "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+      "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+    ]) {
+      assert.equal(classifyRemoteError(message), "auth");
+    }
+  });
+
+  // 私人儲存庫在權限不足時 GitHub 也回 404，此時該提示重新授權而不是重新連接。
+  it("prefers authorization over not-found when SSO is the real cause", () => {
+    assert.equal(
+      classifyRemoteError(
+        "remote: The `acme' organization has enabled or enforced SAML SSO.\n" +
+          "remote: Repository not found."
+      ),
+      "auth"
+    );
+  });
+
+  it("recognises transient network failures, which are the only retryable kind", () => {
+    for (const message of [
+      "fatal: unable to access 'https://github.com/me/backup.git/': Could not resolve host: github.com",
+      "fatal: unable to access '...': Failed to connect to github.com port 443 after 21000 ms: Timed out",
+    ]) {
+      assert.equal(classifyRemoteError(message), "network");
+    }
+  });
+
+  it("falls back to unknown so the retry action stays available", () => {
+    assert.equal(classifyRemoteError("fatal: something entirely new"), "unknown");
   });
 });
 

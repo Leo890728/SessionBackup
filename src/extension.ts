@@ -13,7 +13,7 @@ import {
   updateSelectedSessions,
 } from "./config";
 import { registerDebugCommands } from "./debug";
-import { setupRemote } from "./github";
+import { getSessionToken, setupRemote } from "./github";
 import { Git } from "./git";
 import {
   applyMachineIdentity,
@@ -258,6 +258,25 @@ export function activate(context: vscode.ExtensionContext): void {
       } catch (err: any) {
         vscode.window.showErrorMessage("Session Backup 設定遠端失敗：" + err.message);
       }
+    }),
+    vscode.commands.registerCommand("sessionBackup.reconnectRemote", async () => {
+      try {
+        // forcePick：從「已連接」進來的意圖是換一個儲存庫，自動挑選只會挑回原本那個。
+        await setupRemote(out, { forcePick: true });
+        repository.refresh();
+      } catch (err: any) {
+        vscode.window.showErrorMessage(
+          "Session Backup 重新連接儲存庫失敗：" + err.message
+        );
+      }
+    }),
+    vscode.commands.registerCommand("sessionBackup.signInGithub", async () => {
+      const token = await getSessionToken(true);
+      if (!token) {
+        vscode.window.showWarningMessage("Session Backup: 尚未取得 GitHub 授權。");
+        return;
+      }
+      repository.refresh();
     }),
     vscode.commands.registerCommand("sessionBackup.publishGithub", async () => {
       try {

@@ -13,6 +13,38 @@ export function remoteLabel(remote: string): string {
   return parts.length >= 2 ? parts.slice(-2).join("/") : normalized;
 }
 
+/**
+ * 檢查備份狀態失敗的原因。分類的意義在於「重試」只對其中一種有用：
+ * 遠端被刪或 URL 打錯時再按幾次都一樣，要的是重新連接。
+ */
+export type RemoteErrorKind = "not-found" | "auth" | "network" | "unknown";
+
+export function classifyRemoteError(message: string): RemoteErrorKind {
+  const text = message.toLowerCase();
+  // 授權要排在最前面：私人儲存庫在權限不足時，GitHub 也會回 "Repository not found"，
+  // 但只要訊息裡出現明確的授權字樣，那就是授權問題而不是儲存庫不見了。
+  if (
+    /authentication failed|could not read username|could not read password|invalid username or password|permission denied \(publickey\)|terminal prompts disabled|support for password authentication was removed|saml|single sign-on|sso|403 forbidden/.test(
+      text
+    )
+  ) {
+    return "auth";
+  }
+  if (
+    /repository not found|not found|does not appear to be a git repository|404/.test(text)
+  ) {
+    return "not-found";
+  }
+  if (
+    /could not resolve host|failed to connect|connection timed out|operation timed out|timed out|network is unreachable|temporary failure in name resolution|proxy/.test(
+      text
+    )
+  ) {
+    return "network";
+  }
+  return "unknown";
+}
+
 export function classifyRepositoryChanges(
   localChanged: boolean,
   remoteChanged: boolean
