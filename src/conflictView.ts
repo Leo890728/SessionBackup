@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
+import { escapeHtml } from "./htmlEscape";
 import { renderSessionMarkdown, Tool } from "./sessions";
 
 export type ConflictChoice = "A" | "B" | "skip";
@@ -113,10 +114,6 @@ function conflictHtml(
   </script>
 </body>
 </html>`;
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char] ?? char);
 }
 
 function formatBytes(bytes: number): string {

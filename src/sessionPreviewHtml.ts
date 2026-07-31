@@ -1,5 +1,6 @@
 import * as path from "path";
-import { escapeHtml, renderMarkdown } from "./markdownHtml";
+import { escapeHtml } from "./htmlEscape";
+import { renderMarkdown } from "./markdownHtml";
 import { Transcript, TranscriptBlock, TranscriptMessage } from "./sessions";
 
 /**

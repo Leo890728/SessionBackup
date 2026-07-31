@@ -1,4 +1,4 @@
-import { escapeHtml } from "./markdownHtml";
+import { escapeHtml } from "./htmlEscape";
 
 /**
  * 程式碼區塊的語法上色。

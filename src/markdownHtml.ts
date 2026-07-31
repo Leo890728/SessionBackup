@@ -7,14 +7,7 @@
  */
 
 import { highlightCode } from "./highlight";
-
-export function escapeHtml(value: string): string {
-  return value.replace(
-    /[&<>"']/g,
-    (char) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char] ?? char
-  );
-}
+import { escapeHtml } from "./htmlEscape";
 
 export function renderMarkdown(source: string): string {
   const lines = source.replace(/\r\n/g, "\n").split("\n");
