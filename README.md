@@ -111,7 +111,7 @@ Codex 以 `session_meta.payload.cwd` 決定 session 屬於哪個工作目錄—�
   - ○ **待備份** — 已勾選但尚未備份過（包含之前因金鑰跳過的）
   - ⃠ **未選取** — 沒有勾選，備份與同步都會跳過
   - ⚠ **跳過（過大）** — 超過 `maxFileSizeMB` 上限
-- 點擊 session 可預覽 Markdown。
+- 點擊 session 可預覽 Markdown；可從預覽頁直接回到 Claude Code 或 Codex 的原生對話視窗。
 - 右鍵可匯出 Markdown、開啟原始 JSONL、加入或移出備份。
 
 ## 選擇要備份的對話

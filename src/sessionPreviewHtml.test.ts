@@ -142,4 +142,21 @@ describe("previewHtml", () => {
       false
     );
   });
+
+  it("shows native conversation actions regardless of sync status", () => {
+    const synced = previewHtml(transcript([]), "n0", {}, { status: "synced" });
+    assert.ok(synced.includes('id="reload" class="icon-button"'));
+    assert.ok(synced.includes('aria-label="重新整理"'));
+    assert.equal(synced.includes(">重新整理</button>"), false);
+    assert.ok(synced.includes('id="open-conversation"'));
+    assert.ok(synced.includes('title="在 Claude Code 開啟此 session"'));
+    assert.ok(synced.includes("{ command: 'open-conversation' }"));
+
+    for (const status of ["unbacked", "modified", "unselected", "too-large"] as const) {
+      const html = previewHtml(transcript([]), "n0", {}, { status });
+      assert.ok(html.includes('id="open-conversation"'), status);
+    }
+
+    assert.ok(previewHtml(transcript([]), "n0").includes('id="open-conversation"'));
+  });
 });

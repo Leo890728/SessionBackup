@@ -13,6 +13,7 @@ export function renderMarkdown(source: string): string {
   const lines = source.replace(/\r\n/g, "\n").split("\n");
   const out: string[] = [];
   let listType: "ul" | "ol" | undefined;
+  let openTag: string | undefined;
   let index = 0;
 
   const closeList = () => {
@@ -46,6 +47,29 @@ export function renderMarkdown(source: string): string {
         `<pre class="code"${lang}><code>${highlightCode(body.join("\n"), fence[1])}</code></pre>`
       );
       continue;
+    }
+
+    // Codex 有些回覆會用 <proposed_plan>…</proposed_plan> 這類自訂標籤整段包住內容
+    // （來自使用者自己的 skill／prompt 慣例），單獨一行的開／收標籤原本會被當成
+    // 一般段落逐字逃逸顯示。改成收合成一個有標籤的卡片，裡面照常跑 Markdown。
+    if (!openTag) {
+      const open = /^<([a-zA-Z][\w-]*)>\s*$/.exec(line);
+      if (open) {
+        closeList();
+        openTag = open[1];
+        out.push(`<div class="callout"><div class="callout-label">${escapeHtml(calloutLabel(openTag))}</div>`);
+        index++;
+        continue;
+      }
+    } else {
+      const close = /^<\/([a-zA-Z][\w-]*)>\s*$/.exec(line);
+      if (close && close[1] === openTag) {
+        closeList();
+        out.push("</div>");
+        openTag = undefined;
+        index++;
+        continue;
+      }
     }
 
     if (!line.trim()) {
@@ -141,7 +165,16 @@ export function renderMarkdown(source: string): string {
   }
 
   closeList();
+  if (openTag) {
+    // 沒有收尾標籤（訊息中途被截斷）也要把卡片關起來，不然後面全部內容都會被吞進去。
+    out.push("</div>");
+  }
   return out.join("\n");
+}
+
+/** <proposed_plan> → PROPOSED PLAN，給不了中文翻譯就照樣顯示英文標籤名。 */
+function calloutLabel(tag: string): string {
+  return tag.replace(/[_-]+/g, " ").toUpperCase();
 }
 
 /**
@@ -193,12 +226,17 @@ function link(label: string, target: string): string | undefined {
   if (UNSAFE_LINK.test(local)) {
     return undefined;
   }
-  const anchor = /^(.*?)#L(\d+)(?:-L?\d+)?$/.exec(local);
+  // 兩種行號格式都要吃：GitHub 式的 `#L42`，以及 Codex 引用檔案時常用的
+  // 純冒號 `path:42`（沒有 #L 前綴）。非貪婪的 `.*?` 加上 `$` 錨點會自動
+  // 略過 Windows 磁碟機代號那個冒號（`C:\work\a.ts`），只在真的以
+  // `:數字` 結尾時才切開。
+  const anchor = /^(.*?)(?:#L(\d+)(?:-L?\d+)?|:(\d+))$/.exec(local);
   const filePath = anchor?.[1] ?? local;
   if (!filePath) {
     return undefined;
   }
-  const line = anchor ? ` data-line="${anchor[2]}"` : "";
+  const lineNumber = anchor?.[2] ?? anchor?.[3];
+  const line = lineNumber ? ` data-line="${lineNumber}"` : "";
   return `<a class="file-link" data-path="${filePath}"${line} title="${local}">${label}</a>`;
 }
 
@@ -225,8 +263,10 @@ function inline(text: string): string {
     return `${PLACEHOLDER}${codes.length - 1}${PLACEHOLDER}`;
   });
   html = html.replace(
-    /\[([^\]]+)\]\(([^\s)]+)\)/g,
-    (whole: string, label: string, target: string) => link(label, target) ?? whole
+    // target 允許空白：中文檔名常見「資安 SKILL 應用.md」這種帶空格的檔名，
+    // 只要在下一個 `)` 前結束就視為連結目標，跟一般 Markdown 網址一樣不吃換行。
+    /\[([^\]]+)\]\(([^\n)]+)\)/g,
+    (whole: string, label: string, target: string) => link(label, target.trim()) ?? whole
   );
   html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   html = html.replace(/(^|[^*\w])\*([^*\n]+)\*(?![*\w])/g, "$1<em>$2</em>");

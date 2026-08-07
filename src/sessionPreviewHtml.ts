@@ -59,6 +59,7 @@ export function previewHtml(
       <div class="status-divider-inner"><span>${divider.label}</span></div>
     </div>`
     : "";
+  const openConversationButton = `<button id="open-conversation" class="conversation-button" type="button" title="在 ${toolName} 開啟此 session">在對話開啟</button>`;
 
   return `<!doctype html>
 <html lang="zh-Hant">
@@ -78,7 +79,14 @@ export function previewHtml(
       </div>
       <div class="topbar-side">
         <span class="badge badge-${transcript.tool}">${toolName}</span>
-        <button id="reload" title="重新讀取原始檔">重新整理</button>
+        <div class="topbar-actions">
+          <button id="reload" class="icon-button" type="button" aria-label="重新整理" title="重新讀取原始檔">
+            <svg viewBox="0 0 16 16" fill="none" aria-hidden="true" focusable="false">
+              <path d="M13.25 3.25v3.5h-3.5M12.82 6.45A5.25 5.25 0 1 0 13.2 9" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+          ${openConversationButton}
+        </div>
       </div>
     </header>
     ${statusDivider}
@@ -91,6 +99,7 @@ export function previewHtml(
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     document.getElementById('reload').addEventListener('click', () => vscode.postMessage({ command: 'reload' }));
+    document.getElementById('open-conversation')?.addEventListener('click', () => vscode.postMessage({ command: 'open-conversation' }));
     document.addEventListener('click', (event) => {
       const link = event.target.closest('a.file-link');
       if (!link) return;
@@ -276,7 +285,9 @@ body.vscode-high-contrast .status-divider-inner::before,
 body.vscode-high-contrast .status-divider-inner::after { opacity: 1; }
 .topbar h1 { margin: 0; font-size: 15px; font-weight: 600; }
 .topbar p { margin: 2px 0 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.topbar-main { min-width: 0; }
 .topbar-side { display: flex; align-items: center; gap: 10px; flex: none; }
+.topbar-actions { display: flex; align-items: center; gap: 8px; }
 .badge {
   font-size: 11px;
   padding: 3px 9px;
@@ -297,6 +308,26 @@ button {
   cursor: pointer;
 }
 button:hover { border-color: var(--accent); color: var(--accent); }
+button:active { transform: translateY(1px); }
+button:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, var(--accent));
+  outline-offset: 2px;
+}
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+.icon-button svg { width: 16px; height: 16px; }
+.conversation-button { height: 30px; white-space: nowrap; }
+
+@media (max-width: 620px) {
+  .topbar { align-items: flex-start; padding-inline: 16px; }
+  .topbar-side { flex-wrap: wrap; justify-content: flex-end; }
+  .status-divider { padding-inline: 16px; }
+}
 
 .thread { max-width: 46rem; margin: 0 auto; padding: 28px 24px 64px; }
 .turn { margin: 0 0 28px; }
@@ -364,6 +395,25 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   font-size: 0.92em;
 }
 .prose a.file-link:hover { border-bottom-color: var(--accent); }
+
+.prose .callout {
+  margin: 0 0 14px;
+  padding: 14px 16px 2px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.prose .callout-label {
+  display: inline-block;
+  margin: 0 0 10px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--bubble);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
 
 .context {
   display: inline-flex;

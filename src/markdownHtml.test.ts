@@ -47,6 +47,20 @@ describe("renderMarkdown", () => {
     assert.ok(html.includes('data-line="42"'));
   });
 
+  // Codex 引用檔案常用純冒號的 `path:行號`，沒有 #L 前綴。
+  it("keeps the line number of a colon-style file reference", () => {
+    const html = renderMarkdown("[REFACTORING_REPORT.md](REFACTORING_REPORT.md:1)");
+    assert.ok(html.includes('data-path="REFACTORING_REPORT.md"'));
+    assert.ok(html.includes('data-line="1"'));
+  });
+
+  // 單一字母加冒號是磁碟機代號，不是 scheme；也要跟結尾的 `:行號` 分清楚。
+  it("keeps the line number of a colon-style reference on an absolute Windows path", () => {
+    const html = renderMarkdown("[a.ts](C:\\work\\a.ts:10)");
+    assert.ok(html.includes('data-path="C:\\work\\a.ts"'));
+    assert.ok(html.includes('data-line="10"'));
+  });
+
   // 單一字母加冒號是磁碟機代號，不是 scheme
   it("links an absolute Windows path", () => {
     const html = renderMarkdown("[.gitignore](C:\\work\\SAM3_LoRa\\.gitignore)");
@@ -56,6 +70,15 @@ describe("renderMarkdown", () => {
   it("links a file:// target as a path", () => {
     const html = renderMarkdown("[a.ts](file:///d:/work/a.ts)");
     assert.ok(html.includes('data-path="d:/work/a.ts"'));
+  });
+
+  it("links a target that contains spaces (Chinese filenames often do)", () => {
+    const html = renderMarkdown("[資安 SKILL 應用.md](資安 SKILL 應用.md) 先讀這份");
+    assert.ok(
+      html.includes(
+        '<a class="file-link" data-path="資安 SKILL 應用.md" title="資安 SKILL 應用.md">資安 SKILL 應用.md</a>'
+      )
+    );
   });
 
   it("refuses to link a scripting scheme", () => {
@@ -92,5 +115,20 @@ describe("renderMarkdown", () => {
   it("closes an unterminated code fence at the end of the text", () => {
     const html = renderMarkdown("```\n還在輸出");
     assert.ok(html.includes("<pre class=\"code\"><code>還在輸出</code></pre>"));
+  });
+
+  it("wraps a standalone <tag>…</tag> block as a formatted callout instead of escaped text", () => {
+    const html = renderMarkdown("<proposed_plan>\n\n## 摘要\n\n- 第一點\n\n</proposed_plan>");
+    assert.equal(html.includes("&lt;proposed_plan&gt;"), false);
+    assert.ok(html.includes('<div class="callout"><div class="callout-label">PROPOSED PLAN</div>'));
+    assert.ok(html.includes("<h4>摘要</h4>"));
+    assert.ok(html.includes("<li>第一點</li>"));
+    assert.ok(html.trim().endsWith("</div>"));
+  });
+
+  it("still closes the callout when the closing tag is missing", () => {
+    const html = renderMarkdown("<proposed_plan>\n內容還在跑");
+    assert.ok(html.includes('<div class="callout">'));
+    assert.ok(html.trim().endsWith("</div>"));
   });
 });
