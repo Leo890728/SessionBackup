@@ -37,6 +37,8 @@ export interface SessionInfo {
 export interface ClaudeProject {
   dir: string;
   label: string;
+  /** 從 session 內容讀出的實際工作目錄；讀不到時使用 decoded 的近似路徑。 */
+  cwd?: string;
   decoded: string;
   mtime: number;
   count: number;
@@ -213,6 +215,23 @@ export function decodeProjectDir(name: string): string {
   return name;
 }
 
+/** 只讀第一個 chunk 找 cwd，避免為了建立專案樹掃完整份 Claude 對話。 */
+async function readClaudeProjectCwd(file: string): Promise<string | undefined> {
+  for (const value of await readFirstLines(file)) {
+    if (typeof value?.cwd === "string" && value.cwd.trim()) {
+      return value.cwd;
+    }
+  }
+  return undefined;
+}
+
+function cwdMatchesClaudeProjectDir(cwd: string, projectDir: string): boolean {
+  const normalized = sessionProjectIdentity(cwd).cwd;
+  return (
+    normalized?.replace(/[:\\/]/g, "-").toLowerCase() === projectDir.toLowerCase()
+  );
+}
+
 export async function listClaudeProjects(projectsRoot: string): Promise<ClaudeProject[]> {
   let entries: fs.Dirent[];
   try {
@@ -226,25 +245,46 @@ export async function listClaudeProjects(projectsRoot: string): Promise<ClaudePr
       continue;
     }
     const dir = path.join(projectsRoot, e.name);
-    let files: string[] = [];
-    let mtime = 0;
+    let files: { name: string; mtime: number }[] = [];
     try {
-      files = (await fs.promises.readdir(dir)).filter((f) => f.endsWith(".jsonl"));
-      mtime = (await fs.promises.stat(dir)).mtimeMs;
+      const names = (await fs.promises.readdir(dir)).filter((f) => f.endsWith(".jsonl"));
+      files = (
+        await Promise.all(
+          names.map(async (name) => {
+            try {
+              return { name, mtime: (await fs.promises.stat(path.join(dir, name))).mtimeMs };
+            } catch {
+              return undefined;
+            }
+          })
+        )
+      )
+        .filter((file): file is { name: string; mtime: number } => Boolean(file))
+        .sort((a, b) => b.mtime - a.mtime || a.name.localeCompare(b.name));
     } catch {
       continue;
     }
     if (!files.length) {
       continue;
     }
-    const decoded = decodeProjectDir(e.name);
+    let recordedCwd: string | undefined;
+    for (const file of files) {
+      const candidate = await readClaudeProjectCwd(path.join(dir, file.name));
+      if (candidate && cwdMatchesClaudeProjectDir(candidate, e.name)) {
+        recordedCwd = candidate;
+        break;
+      }
+    }
+    const identity = sessionProjectIdentity(recordedCwd ?? decodeProjectDir(e.name));
+    const decoded = identity.cwd ?? decodeProjectDir(e.name);
     out.push({
       dir,
-      label: decoded.split("\\").filter(Boolean).pop() ?? e.name,
+      label: identity.label,
+      cwd: recordedCwd ? identity.cwd : undefined,
       decoded,
-      mtime,
+      mtime: files[0].mtime,
       count: files.length,
-      sessionIds: files.map((f) => f.replace(/\.jsonl$/, "")),
+      sessionIds: files.map((file) => file.name.replace(/\.jsonl$/, "")),
     });
   }
   return out.sort((a, b) => b.mtime - a.mtime);
@@ -467,6 +507,197 @@ export function groupCodexThreads(infos: SessionInfo[]): CodexThreadGroup {
     arr.sort((a, b) => b.mtime - a.mtime);
   }
   return { topLevel, subsByHost, orphans };
+}
+
+/* ---------- Codex 專案分組 ---------- */
+
+export interface CodexProjectGroup {
+  /** 跨平台正規化後的工作目錄；供樹節點 id 與分組使用。 */
+  key: string;
+  /** 工作目錄的最後一段；側欄以此作為專案名稱。 */
+  label: string;
+  /** 正規化後、供使用者辨識的完整工作目錄。 */
+  cwd?: string;
+  sessions: SessionInfo[];
+  /** 專案中最新 session 的修改時間；用來排列專案。 */
+  latestMtime: number;
+}
+
+export interface SessionProjectIdentity {
+  key: string;
+  label: string;
+  cwd?: string;
+}
+
+export interface ClaudeProjectAiGroup {
+  tool: "claude";
+  projects: ClaudeProject[];
+  latestMtime: number;
+}
+
+export interface CodexProjectAiGroup {
+  tool: "codex";
+  sessions: SessionInfo[];
+  latestMtime: number;
+}
+
+export type SessionProjectAiGroup = ClaudeProjectAiGroup | CodexProjectAiGroup;
+
+export interface SessionProjectGroup extends SessionProjectIdentity {
+  ai: SessionProjectAiGroup[];
+  latestMtime: number;
+}
+
+/**
+ * 依 Codex session 記錄的 cwd 分組。Windows 路徑不分大小寫且接受兩種分隔符，
+ * POSIX 路徑則保留大小寫；沒有 cwd 的舊紀錄集中到同一個 fallback 群組。
+ */
+export function groupCodexProjects(infos: SessionInfo[]): CodexProjectGroup[] {
+  const groups = new Map<string, CodexProjectGroup>();
+  for (const info of infos) {
+    const project = sessionProjectIdentity(info.cwd);
+    let group = groups.get(project.key);
+    if (!group) {
+      group = {
+        ...project,
+        sessions: [],
+        latestMtime: info.mtime,
+      };
+      groups.set(project.key, group);
+    }
+    group.sessions.push(info);
+    group.latestMtime = Math.max(group.latestMtime, info.mtime);
+  }
+
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      sessions: group.sessions.slice().sort((a, b) => b.mtime - a.mtime),
+    }))
+    .sort(
+      (a, b) =>
+        b.latestMtime - a.latestMtime ||
+        a.label.localeCompare(b.label) ||
+        a.key.localeCompare(b.key)
+    );
+}
+
+export function sessionProjectIdentity(
+  cwd: string | undefined
+): SessionProjectIdentity {
+  const raw = cwd?.trim();
+  if (!raw) {
+    return { key: "missing:", label: "未識別專案" };
+  }
+
+  // 不能直接使用主機的 path 實作：同步回來的 session 可能來自另一種作業系統。
+  const isWindows =
+    /^[a-z]:[\\/]/i.test(raw) ||
+    raw.startsWith("\\\\") ||
+    (!raw.startsWith("/") && raw.includes("\\"));
+  const flavor = isWindows ? path.win32 : path.posix;
+  const normalized = flavor.normalize(raw);
+  const root = flavor.parse(normalized).root;
+  const clean =
+    normalized.length > root.length ? normalized.replace(/[\\/]+$/, "") : normalized;
+  return {
+    key: `${isWindows ? "windows" : "posix"}:${
+      isWindows ? clean.toLowerCase() : clean
+    }`,
+    label: flavor.basename(clean) || clean,
+    cwd: clean,
+  };
+}
+
+/**
+ * 把 Claude 的 project buckets 與 Codex 頂層 sessions 合成「專案 → AI」資料模型。
+ * Claude 沒有可信 cwd 時刻意以 bucket 自成一組，避免近似解碼誤併到 Codex 專案。
+ */
+export function groupSessionProjects(
+  claudeProjects: readonly ClaudeProject[],
+  codexTopLevel: readonly SessionInfo[]
+): SessionProjectGroup[] {
+  interface MutableProject extends SessionProjectIdentity {
+    claudeProjects: ClaudeProject[];
+    codexSessions: SessionInfo[];
+    latestMtime: number;
+  }
+
+  const projects = new Map<string, MutableProject>();
+  const ensure = (
+    identity: SessionProjectIdentity,
+    latestMtime: number
+  ): MutableProject => {
+    let project = projects.get(identity.key);
+    if (!project) {
+      project = {
+        ...identity,
+        claudeProjects: [],
+        codexSessions: [],
+        latestMtime,
+      };
+      projects.set(identity.key, project);
+    }
+    project.latestMtime = Math.max(project.latestMtime, latestMtime);
+    return project;
+  };
+
+  for (const claude of claudeProjects) {
+    const projectDir = path.basename(claude.dir);
+    const identity = claude.cwd
+      ? sessionProjectIdentity(claude.cwd)
+      : {
+          key: `claudeBucket:${projectDir.toLowerCase()}`,
+          label: claude.label,
+          cwd: claude.decoded,
+        };
+    ensure(identity, claude.mtime).claudeProjects.push(claude);
+  }
+
+  for (const codex of groupCodexProjects([...codexTopLevel])) {
+    ensure(
+      { key: codex.key, label: codex.label, cwd: codex.cwd },
+      codex.latestMtime
+    ).codexSessions.push(...codex.sessions);
+  }
+
+  return [...projects.values()]
+    .map((project) => {
+      const ai: SessionProjectAiGroup[] = [];
+      if (project.claudeProjects.length) {
+        const items = project.claudeProjects
+          .slice()
+          .sort((a, b) => b.mtime - a.mtime || a.dir.localeCompare(b.dir));
+        ai.push({
+          tool: "claude",
+          projects: items,
+          latestMtime: items[0].mtime,
+        });
+      }
+      if (project.codexSessions.length) {
+        const sessions = project.codexSessions
+          .slice()
+          .sort((a, b) => b.mtime - a.mtime || a.file.localeCompare(b.file));
+        ai.push({
+          tool: "codex",
+          sessions,
+          latestMtime: sessions[0].mtime,
+        });
+      }
+      return {
+        key: project.key,
+        label: project.label,
+        cwd: project.cwd,
+        ai,
+        latestMtime: project.latestMtime,
+      };
+    })
+    .sort(
+      (a, b) =>
+        b.latestMtime - a.latestMtime ||
+        a.label.localeCompare(b.label) ||
+        a.key.localeCompare(b.key)
+    );
 }
 
 /* ---------- 對話內容解析 ---------- */

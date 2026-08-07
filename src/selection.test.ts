@@ -2,6 +2,7 @@ import * as assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   applyRule,
+  applyProjectGroupRules,
   applySessionRules,
   claudeProjectKey,
   partialHint,
@@ -138,6 +139,58 @@ describe("applySessionRules", () => {
       false
     );
     assert.deepEqual(keys, ["-session:codex:a", "tool:codex"]);
+  });
+});
+
+describe("applyProjectGroupRules", () => {
+  const codex = { tool: "codex" as const, id: "c1" };
+
+  it("uses a Claude project scope and current Codex sessions without adding tool rules", () => {
+    assert.deepEqual(applyProjectGroupRules([], ["C--proj"], [codex], true), [
+      "claudeProject:C--proj",
+      "session:codex:c1",
+    ]);
+  });
+
+  it("creates project-local exclusions under existing tool scopes and removes them on reselect", () => {
+    const excluded = applyProjectGroupRules(
+      ["tool:claude", "tool:codex"],
+      ["C--proj"],
+      [codex],
+      false
+    );
+    assert.deepEqual(excluded, [
+      "-claudeProject:C--proj",
+      "-session:codex:c1",
+      "tool:claude",
+      "tool:codex",
+    ]);
+    assert.deepEqual(applyProjectGroupRules(excluded, ["C--proj"], [codex], true), [
+      "tool:claude",
+      "tool:codex",
+    ]);
+  });
+
+  it("preserves more specific Claude session overrides", () => {
+    assert.deepEqual(
+      applyProjectGroupRules(["-session:claude:s1"], ["C--proj"], [], true),
+      ["-session:claude:s1", "claudeProject:C--proj"]
+    );
+    assert.deepEqual(
+      applyProjectGroupRules(
+        ["claudeProject:C--proj", "session:claude:s1"],
+        ["C--proj"],
+        [],
+        false
+      ),
+      ["session:claude:s1"]
+    );
+  });
+
+  it("deduplicates repeated Codex backup ids", () => {
+    assert.deepEqual(applyProjectGroupRules([], [], [codex, codex], true), [
+      "session:codex:c1",
+    ]);
   });
 });
 

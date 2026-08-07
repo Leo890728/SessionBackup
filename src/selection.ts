@@ -212,3 +212,38 @@ export function applySessionRules(
   }
   return keys;
 }
+
+/**
+ * 套用一個 UI 專案底下的複合規則：Claude 使用可涵蓋未來對話的 project scope，
+ * Codex 則只能逐一套用目前已知 sessions。此函式不會建立 tool:* 全域規則。
+ */
+export function applyProjectGroupRules(
+  current: readonly string[],
+  claudeProjectDirs: readonly string[],
+  sessionTargets: readonly SelectionTarget[],
+  selected: boolean
+): string[] {
+  let next = [...current];
+  for (const projectDir of new Set(claudeProjectDirs)) {
+    const target: SelectionTarget = {
+      tool: "claude",
+      id: "",
+      claudeProjectDir: projectDir,
+    };
+    next = applyRule(
+      next,
+      claudeProjectKey(projectDir),
+      selected,
+      new SelectionSet(next).coveredByScope(target, "claudeProject")
+    );
+  }
+
+  const uniqueTargets = new Map<string, SelectionTarget>();
+  for (const target of sessionTargets) {
+    uniqueTargets.set(
+      `${target.tool}:${target.id}:${target.claudeProjectDir ?? ""}`,
+      target
+    );
+  }
+  return applySessionRules(next, [...uniqueTargets.values()], selected);
+}

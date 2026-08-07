@@ -100,11 +100,11 @@ Codex 以 `session_meta.payload.cwd` 決定 session 屬於哪個工作目錄—�
 
 活動列的 **Session Backup** 圖示會顯示本機 session：
 
-- Claude Code 依專案分組，Codex 依日期分組。
+- Sessions 採 **專案 → AI（Claude Code / Codex）→ 對話** 三層結構；兩種 AI 的工作目錄相同時會合併到同一個專案，專案與對話皆以最近更新優先排列。
 - Codex 子代理 thread（session_meta 含 `parent_thread_id`，如 guardian）不會當
   獨立 session 顯示，而是掛在父 thread 最新 rollout 檔的節點下展開；
   父檔案已被 Codex 清除的子 thread 不顯示（仍會照常備份）。
-- 每個節點左側都有核取方塊，用來決定備份哪些對話。
+- 專案、AI 與對話節點左側都有核取方塊，用來決定備份哪些對話。
 - 每個 session 顯示備份狀態（比對本機 manifest，不需連網）：
   - ✓ **已同步** — 目前內容已在備份中
   - ☁ **未同步** — 備份後有新內容，下次備份會更新
@@ -120,12 +120,13 @@ Codex 以 `session_meta.payload.cwd` 決定 session 屬於哪個工作目錄—�
 
 | 勾選位置 | 規則 | 涵蓋範圍 |
 | --- | --- | --- |
-| 工具節點（Claude Code / Codex） | `tool:claude`、`tool:codex` | 該工具全部對話，**含之後新增的** |
-| Claude 專案節點 | `claudeProject:<projects 目錄名>` | 該專案全部對話，**含之後新增的** |
+| 專案節點 | 複合套用底下兩個 AI 的規則 | Claude Code 含之後新增的對話；Codex 只有當下已有的對話 |
+| 專案下的 Claude Code 節點 | `claudeProject:<projects 目錄名>` | 該專案全部 Claude Code 對話，**含之後新增的** |
+| 專案下的 Codex 節點 | （逐一套用到該工作目錄目前的對話） | 只有當下那些 Codex 對話，不含之後新增的 |
 | 單一對話 | `session:<tool>:<sessionId>` | 該 thread 的所有 rollout 檔 |
-| Codex 日期節點 | （逐一套用到當天的對話） | 只有當下那些對話，不含之後新增的 |
 
 - 前綴 `-` 代表排除（如 `-session:codex:019f44…`）。
+- 既有的 `tool:claude`／`tool:codex` 全工具規則仍會生效；新樹狀結構不會從專案內的 AI 節點新增全工具規則。
 - 判定時**越具體的規則越優先**：session > claudeProject > tool。
   所以可以勾整個專案，再單獨取消其中一個對話；也可以在沒勾整個工具的情況下只勾幾個對話。
 - 沒有任何規則涵蓋的對話完全不參與備份流程：不上傳、不列入「有變動的 sessions」、

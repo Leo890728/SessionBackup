@@ -31,6 +31,16 @@ export class ProjectMappingRegistry {
     return this.file;
   }
 
+  /** 只讀既有 bucket 對應，供 Sessions 側欄顯示本機專案；不做 git 偵測或寫入。 */
+  async mappedPathForClaudeProject(
+    claudeProjectDir: string
+  ): Promise<string | undefined> {
+    await this.load();
+    return this.data!.mappings.find(
+      (mapping) => mapping.claudeProjectDir.toLowerCase() === claudeProjectDir.toLowerCase()
+    )?.localPath;
+  }
+
   /** 檔案被外部刪除（除錯命令清資料）後丟掉記憶體快取，否則下次寫入會把舊資料寫回去。 */
   reset(): void {
     this.data = undefined;
