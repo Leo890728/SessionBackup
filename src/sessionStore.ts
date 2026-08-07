@@ -73,6 +73,26 @@ export interface MachineManifest {
 
 export type MergeRelation = "same" | "remote-newer" | "local-newer" | "conflict";
 
+/**
+ * mtimeMs/size 只是來源檔案的觀察值，不是 revision 的身分。
+ * Claude 載入舊對話時可能原封不動重寫檔案；內容與 manifest 中繼資料都相同時，
+ * 沿用舊紀錄，避免把單純推進的檔案時間誤當成一次備份變更。
+ */
+function sameManifestEntryIgnoringFileStats(
+  previous: ManifestSession,
+  current: ManifestSession
+): boolean {
+  return (
+    previous.tool === current.tool &&
+    previous.id === current.id &&
+    previous.relativePath === current.relativePath &&
+    previous.hash === current.hash &&
+    previous.title === current.title &&
+    previous.titleUpdatedAt === current.titleUpdatedAt &&
+    JSON.stringify(previous.project) === JSON.stringify(current.project)
+  );
+}
+
 const SESSION_ROOTS: Record<Tool, string[]> = {
   claude: ["projects", "sessions"],
   codex: ["sessions", "archived_sessions"],
@@ -310,7 +330,7 @@ export async function storeSessions(
       }
       copied.push(rel);
     }
-    manifestSessions.push({
+    const manifestSession: ManifestSession = {
       tool: session.tool,
       id: session.id,
       relativePath: session.relativePath,
@@ -321,7 +341,13 @@ export async function storeSessions(
         ? { title: session.title, titleUpdatedAt: session.titleUpdatedAt }
         : {}),
       project: session.project,
-    });
+    };
+    const previousSession = previousByPath.get(`${session.tool}:${session.relativePath}`);
+    manifestSessions.push(
+      previousSession && sameManifestEntryIgnoringFileStats(previousSession, manifestSession)
+        ? previousSession
+        : manifestSession
+    );
   }
 
   let manifest: MachineManifest = {

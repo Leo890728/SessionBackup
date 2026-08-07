@@ -67,7 +67,13 @@ describe("storeSessions", () => {
     };
     try {
       const first = await storeSessions(root, "machine-a", [session], 1024 * 1024);
-      const second = await storeSessions(root, "machine-a", [session], 1024 * 1024);
+      // Claude 載入舊對話時可能只推進來源檔案的 mtime；內容 hash 沒變就不是新 revision。
+      const second = await storeSessions(
+        root,
+        "machine-a",
+        [{ ...session, mtimeMs: 999 }],
+        1024 * 1024
+      );
       assert.deepEqual(first.copied.sort(), [
         "format.json",
         "machines/machine-a/manifest.json",
