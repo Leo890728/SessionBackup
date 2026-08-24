@@ -108,6 +108,38 @@ describe("groupSessionProjects", () => {
     );
   });
 
+  it("sinks projects without a local folder below the local ones", () => {
+    const groups = groupSessionProjects(
+      [],
+      [
+        // 從別台電腦同步回來的：mtime 最新，但本機沒有這個資料夾。
+        codex("remote", "D:\\Work\\RPG", 900),
+        codex("local", "C:\\Work\\App", 100),
+      ],
+      (cwd) => cwd?.toLowerCase().startsWith("c:") ?? true
+    );
+
+    assert.deepEqual(
+      groups.map((group) => [group.label, group.local]),
+      [
+        ["App", true],
+        ["RPG", false],
+      ]
+    );
+  });
+
+  it("asks the caller about every project, including ones without a cwd", () => {
+    const asked: (string | undefined)[] = [];
+    const groups = groupSessionProjects([], [codex("blank", undefined, 100)], (cwd) => {
+      asked.push(cwd);
+      return false;
+    });
+
+    assert.deepEqual(asked, [undefined]);
+    assert.equal(groups[0].key, "missing:");
+    assert.equal(groups[0].local, false);
+  });
+
   it("keeps a Claude bucket without trusted cwd separate from missing Codex cwd", () => {
     const groups = groupSessionProjects(
       [claude(undefined, 100)],

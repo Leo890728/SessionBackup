@@ -147,19 +147,31 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           summaries.length > 0 &&
           summaries.every((summary) => summary.selected);
         const partial = partialHint(chosen, total);
-        item.description = `${n.children.length} AI · ${groupDescription(
+        const summary = `${n.children.length} AI · ${groupDescription(
           total,
           chosen,
           selected,
           partial,
         )}`;
+        // 工作目錄不在這台電腦上時要一眼看得出來，否則它混在本機專案裡
+        // 看起來就像已經對應好了。
+        item.description = n.local ? summary : `未對應 · ${summary}`;
         item.tooltip =
           (n.cwd
             ? `工作目錄:${n.cwd}\n\n`
             : "這個專案沒有可用的工作目錄。\n\n") +
+          (n.local
+            ? ""
+            : "這個工作目錄在本機不存在——多半是從其他電腦同步回來的對話，" +
+              "也可能是資料夾已被移動或刪除。對話仍可瀏覽與勾選。\n\n") +
           (partial ? PARTIAL_TIP : "") +
           projectSelectionTip(n.children);
-        item.iconPath = vscode.ThemeIcon.Folder;
+        item.iconPath = n.local
+          ? vscode.ThemeIcon.Folder
+          : new vscode.ThemeIcon(
+              "cloud",
+              new vscode.ThemeColor("descriptionForeground"),
+            );
         item.contextValue = selected ? "projectSelected" : "projectUnselected";
         item.checkboxState = checkbox(selected);
         return item;
@@ -421,36 +433,43 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     );
     const { topLevel, subsByHost } = groupCodexThreads(codexInfos);
 
-    return groupSessionProjects(claudeProjects, topLevel).map((project) => {
-      const children: (ClaudeProjectNode | CodexProjectNode)[] = project.ai.map(
-        (ai) =>
-          ai.tool === "claude"
-            ? {
-                kind: "claudeProject" as const,
-                projectKey: project.key,
-                projectLabel: project.label,
-                cwd: project.cwd,
-                projects: ai.projects,
-              }
-            : {
-                kind: "codexProject" as const,
-                projectKey: project.key,
-                projectLabel: project.label,
-                cwd: project.cwd,
-                codexRoot: dirs.codex,
-                topLevel: ai.sessions,
-                subsByHost,
-              },
-      );
-      return {
-        kind: "project",
-        key: project.key,
-        label: project.label,
-        cwd: project.cwd,
-        latestMtime: project.latestMtime,
-        children,
-      };
-    });
+    // 沒有 cwd 的舊紀錄（未識別專案）不算「別台電腦的」，維持在本機那一組。
+    const isLocalPath = (cwd: string | undefined): boolean =>
+      !cwd || fs.existsSync(cwd);
+
+    return groupSessionProjects(claudeProjects, topLevel, isLocalPath).map(
+      (project) => {
+        const children: (ClaudeProjectNode | CodexProjectNode)[] =
+          project.ai.map((ai) =>
+            ai.tool === "claude"
+              ? {
+                  kind: "claudeProject" as const,
+                  projectKey: project.key,
+                  projectLabel: project.label,
+                  cwd: project.cwd,
+                  projects: ai.projects,
+                }
+              : {
+                  kind: "codexProject" as const,
+                  projectKey: project.key,
+                  projectLabel: project.label,
+                  cwd: project.cwd,
+                  codexRoot: dirs.codex,
+                  topLevel: ai.sessions,
+                  subsByHost,
+                },
+          );
+        return {
+          kind: "project",
+          key: project.key,
+          label: project.label,
+          cwd: project.cwd,
+          latestMtime: project.latestMtime,
+          local: project.local,
+          children,
+        };
+      },
+    );
   }
 
   /** 展開 Codex AI 節點時才計算該專案的狀態與子 thread，避免根節點全量 hash。 */

@@ -75,10 +75,14 @@ export function sessionProjectIdentity(
 /**
  * 把 Claude 的 project buckets 與 Codex 頂層 sessions 合成「專案 → AI」資料模型。
  * Claude 沒有可信 cwd 時刻意以 bucket 自成一組，避免近似解碼誤併到 Codex 專案。
+ *
+ * isLocalPath 判斷專案在這台電腦上有沒有位置；解不出位置的排在最後，
+ * 不會和真正的本機專案混在一起（呼叫端據此顯示成「未對應」）。
  */
 export function groupSessionProjects(
   claudeProjects: readonly ClaudeProject[],
-  codexTopLevel: readonly SessionInfo[]
+  codexTopLevel: readonly SessionInfo[],
+  isLocalPath: (cwd: string | undefined) => boolean = () => true
 ): SessionProjectGroup[] {
   interface MutableProject extends SessionProjectIdentity {
     claudeProjects: ClaudeProject[];
@@ -153,10 +157,12 @@ export function groupSessionProjects(
         cwd: project.cwd,
         ai,
         latestMtime: project.latestMtime,
+        local: isLocalPath(project.cwd),
       };
     })
     .sort(
       (a, b) =>
+        Number(b.local) - Number(a.local) ||
         b.latestMtime - a.latestMtime ||
         a.label.localeCompare(b.label) ||
         a.key.localeCompare(b.key)

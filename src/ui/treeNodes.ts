@@ -28,6 +28,8 @@ export type ProjectNode = {
   label: string;
   cwd?: string;
   latestMtime: number;
+  /** 工作目錄在這台電腦上找得到；false 會顯示成「未對應」並排到最後。 */
+  local: boolean;
   children: (ClaudeProjectNode | CodexProjectNode)[];
 };
 

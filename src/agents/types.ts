@@ -93,6 +93,11 @@ export type SessionProjectAiGroup = ClaudeProjectAiGroup | CodexProjectAiGroup;
 export interface SessionProjectGroup extends SessionProjectIdentity {
   ai: SessionProjectAiGroup[];
   latestMtime: number;
+  /**
+   * 工作目錄在這台電腦上找得到。false 的典型情況是從別台電腦同步回來的 Codex
+   * 對話：檔案在本機，cwd 卻是那台電腦的路徑，本機沒有對應的專案資料夾。
+   */
+  local: boolean;
 }
 
 export type TranscriptBlock =
