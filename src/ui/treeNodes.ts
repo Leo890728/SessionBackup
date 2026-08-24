@@ -33,7 +33,19 @@ export type ProjectNode = {
   children: (ClaudeProjectNode | CodexProjectNode)[];
 };
 
+/**
+ * 「未對應」那一層：本機解不出位置的專案都收在這裡，排在已對應的專案之前。
+ * 底下混了兩種——本機有檔案但工作目錄不存在的（多半是別台同步回來的 Codex 對話），
+ * 以及只存在於其他電腦備份、本機還沒有檔案的 Claude 專案。
+ */
+export type UnmappedGroupNode = {
+  kind: "unmappedGroup";
+  count: number;
+  children: TreeNode[];
+};
+
 export type TreeNode =
+  | UnmappedGroupNode
   | ProjectNode
   | ClaudeProjectNode
   | CodexProjectNode

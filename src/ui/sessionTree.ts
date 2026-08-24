@@ -27,6 +27,7 @@ import {
   filterUnmapped,
   RemoteProject,
 } from "../store/unmappedProjects";
+import { sessionStatusUri } from "./sessionDecorations";
 import {
   ClaudeProjectNode,
   CodexProjectNode,
@@ -126,6 +127,25 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
   getTreeItem(n: TreeNode): vscode.TreeItem {
     switch (n.kind) {
+      case "unmappedGroup": {
+        // 預設收合：這是一份待辦清單，不該把每天在用的專案擠到看不見的地方。
+        const item = new vscode.TreeItem(
+          "未對應專案",
+          vscode.TreeItemCollapsibleState.Collapsed,
+        );
+        item.id = "unmapped-group";
+        item.description = String(n.count);
+        item.tooltip =
+          `${n.count} 個專案在這台電腦上找不到位置。\n\n` +
+          "包含其他電腦備份過、本機還沒有檔案的 Claude 專案（點它指定資料夾後會自動同步），" +
+          "以及本機有檔案、但工作目錄是別台電腦路徑的對話。";
+        item.iconPath = new vscode.ThemeIcon(
+          "cloud",
+          new vscode.ThemeColor("descriptionForeground"),
+        );
+        item.contextValue = "unmappedGroup";
+        return item;
+      }
       case "project": {
         const item = new vscode.TreeItem(
           n.label,
@@ -147,12 +167,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           summaries.length > 0 &&
           summaries.every((summary) => summary.selected);
         const partial = partialHint(chosen, total);
-        const summary = `${n.children.length} AI · ${groupDescription(
-          total,
-          chosen,
-          selected,
-          partial,
-        )}`;
+        const summary = groupDescription(total, chosen, selected, partial);
         // 工作目錄不在這台電腦上時要一眼看得出來，否則它混在本機專案裡
         // 看起來就像已經對應好了。
         item.description = n.local ? summary : `未對應 · ${summary}`;
@@ -172,6 +187,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
               "cloud",
               new vscode.ThemeColor("descriptionForeground"),
             );
+        // 底下一則都沒勾就整層調暗，跟未選取的對話同一個訊號。
+        item.resourceUri = dimmedUri(chosen === 0, `project:${n.key}`);
         item.contextValue = selected ? "projectSelected" : "projectUnselected";
         item.checkboxState = checkbox(selected);
         return item;
@@ -198,6 +215,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           "media",
           "claude.png",
         );
+        item.resourceUri = dimmedUri(chosen === 0, `${n.projectKey}:claude`);
         item.contextValue = selected ? "aiSelected" : "aiUnselected";
         item.checkboxState = checkbox(selected);
         return item;
@@ -220,6 +238,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           "media",
           "codex.png",
         );
+        item.resourceUri = dimmedUri(chosen === 0, `${n.projectKey}:codex`);
         item.contextValue = selected ? "aiSelected" : "aiUnselected";
         item.checkboxState = checkbox(selected);
         return item;
@@ -255,10 +274,10 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           `${(s.size / 1024).toFixed(0)} KB，最後更新 ${s.date} ${s.time}`;
         item.contextValue = selected ? "sessionSelected" : "sessionUnselected";
         item.checkboxState = checkbox(selected);
-        item.iconPath = new vscode.ThemeIcon(
-          display.icon,
-          display.color ? new vscode.ThemeColor(display.color) : undefined,
-        );
+        // 狀態走 FileDecorationProvider（列尾的 U/M 字母），圖示就退回中性的對話符號，
+        // 兩邊都畫狀態只會互相打架。
+        item.resourceUri = sessionStatusUri(n.status, s.file);
+        item.iconPath = new vscode.ThemeIcon("comment-discussion");
         item.command = {
           command: "sessionBackup.previewSession",
           title: "預覽",
@@ -300,8 +319,10 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         this.getLocalProjectNodes(),
         this.getUnmappedProjects(),
       ]);
-      return [
-        ...projects,
+      // 待處理的東西擺前面：解不出本機位置的專案（本機有檔案但工作目錄不在）
+      // 與只在其他電腦備份過的專案，都收進同一層，不跟已對應的專案混在一起。
+      const pending: TreeNode[] = [
+        ...projects.filter((project) => !project.local),
         ...unmapped.map((entry): TreeNode => ({
           kind: "unmappedProject",
           project: entry.project,
@@ -309,6 +330,13 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           machines: entry.machines,
         })),
       ];
+      const mapped = projects.filter((project) => project.local);
+      return pending.length
+        ? [{ kind: "unmappedGroup", count: pending.length, children: pending }, ...mapped]
+        : mapped;
+    }
+    if (el.kind === "unmappedGroup") {
+      return el.children;
     }
     if (el.kind === "project") {
       return el.children;
@@ -352,6 +380,10 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
   /** 勾選/取消勾選（checkbox 與右鍵指令共用）。 */
   async setSelected(node: TreeNode, selected: boolean): Promise<void> {
+    if (node.kind === "unmappedGroup") {
+      // 分層用的節點，本身沒有可勾選的東西。
+      return;
+    }
     if (node.kind === "unmappedProject") {
       // 本機還沒有檔案，沒有可套用的選取規則；對應完成後才會出現一般的專案節點。
       return;
@@ -515,6 +547,11 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 
     return node.topLevel.map((info) => toNode(info, new Set()));
   }
+}
+
+/** 整層都沒勾時才給裝飾；有勾到一部分就維持正常顏色，不然會蓋掉「部分選取」的資訊。 */
+function dimmedUri(dim: boolean, key: string): vscode.Uri | undefined {
+  return dim ? sessionStatusUri("unselected", key) : undefined;
 }
 
 function checkbox(selected: boolean): vscode.TreeItemCheckboxState {

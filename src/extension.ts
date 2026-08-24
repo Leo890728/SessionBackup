@@ -48,6 +48,7 @@ import {
   setAutoMachineId,
 } from "./store/sessionStore";
 import { SessionTreeProvider } from "./ui/sessionTree";
+import { SessionDecorationProvider } from "./ui/sessionDecorations";
 import { TreeNode } from "./ui/treeNodes";
 import { rememberKeepLocal, runSync } from "./ops/sync";
 
@@ -89,6 +90,8 @@ export function activate(context: vscode.ExtensionContext): void {
     out,
     statusItem,
     repository,
+    // Sessions 側欄的 U/M 狀態標記（比照檔案總管的 git 裝飾）。
+    new SessionDecorationProvider(),
     ...registerBackupCommands(commands),
     ...registerConflictCommands(commands),
     ...registerProjectsCommands(commands),

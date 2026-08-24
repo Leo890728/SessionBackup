@@ -6,6 +6,8 @@ import type { TreeNode } from "./treeNodes";
 
 export function nodeLabel(node: TreeNode): string {
   switch (node.kind) {
+    case "unmappedGroup":
+      return "未對應專案";
     case "project":
       return `專案「${node.label}」`;
     case "claudeProject":

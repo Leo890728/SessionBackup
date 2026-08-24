@@ -23,6 +23,7 @@ import {
   SessionChangeKind,
 } from "../git/repositoryState";
 import { sessionDisplayName } from "../security/sessionSecretScan";
+import { sessionStatusUri } from "./sessionDecorations";
 import {
   collectLocalSessions,
   LocalSession,
@@ -278,14 +279,12 @@ export class RepositoryTreeProvider
         (added ? "尚未備份過" : "備份後有新內容") +
         (node.total > 1 ? `\n含子代理共 ${node.total} 個檔案` : "") +
         `\n${node.session.file}`;
-      item.iconPath = new vscode.ThemeIcon(
-        added ? "diff-added" : "diff-modified",
-        new vscode.ThemeColor(
-          added
-            ? "gitDecoration.untrackedResourceForeground"
-            : "gitDecoration.modifiedResourceForeground"
-        )
+      // 與 Sessions 側欄同一套標記：列尾的 U（還沒備份過）／M（備份後有新內容）。
+      item.resourceUri = sessionStatusUri(
+        added ? "unbacked" : "modified",
+        node.session.file
       );
+      item.iconPath = new vscode.ThemeIcon("comment-discussion");
       item.command = {
         command: "sessionBackup.previewSession",
         title: "預覽",
