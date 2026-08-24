@@ -2,43 +2,43 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
-import { BackupKind, runBackup } from "./backup";
-import { materializeCodexRevision, readCodexMetaCwd } from "./codexLocalize";
-import { ConflictRecord, ConflictRegistry } from "./conflicts";
-import { showConflictComparison } from "./conflictView";
+import { BackupKind, runBackup } from "./ops/backup";
+import { materializeCodexRevision, readCodexMetaCwd } from "./agents/codexLocalize";
+import { ConflictRecord, ConflictRegistry } from "./store/conflicts";
+import { showConflictComparison } from "./ui/conflictView";
 import {
   clearLegacyIgnoredSessions,
   getConfig,
   readLegacyIgnoredSessions,
   updateSelectedSessions,
 } from "./config";
-import { registerDebugCommands } from "./debug";
-import { getSessionToken, setupRemote } from "./github";
-import { Git } from "./git";
+import { registerDebugCommands } from "./ui/debug";
+import { getSessionToken, setupRemote } from "./git/github";
+import { Git } from "./git/git";
 import {
   applyMachineIdentity,
   deriveMachineId,
   MachineIdentityStore,
-} from "./machineIdentity";
-import { ProjectMappingRegistry } from "./projectMapping";
-import { RepositoryTreeProvider } from "./repositoryTree";
-import { describeSelectionKey } from "./selection";
-import { initialSelectionKeys } from "./selectionMigration";
-import { renderSessionMarkdown } from "./sessions";
+} from "./store/machineIdentity";
+import { ProjectMappingRegistry } from "./store/projectMapping";
+import { RepositoryTreeProvider } from "./ui/repositoryTree";
+import { describeSelectionKey } from "./store/selection";
+import { initialSelectionKeys } from "./store/selectionMigration";
+import { renderSessionMarkdown } from "./agents/sessions";
 import {
   conversationOpenTarget,
   takeClaudeConversationHandoff,
-} from "./sessionConversation";
-import { showSessionPreview } from "./sessionPreview";
+} from "./render/sessionConversation";
+import { showSessionPreview } from "./ui/sessionPreview";
 import {
   machineIdFromConfig,
   manifestRelativePath,
   readManifest,
   revisionRelativePath,
   setAutoMachineId,
-} from "./sessionStore";
-import { SessionTreeProvider, TreeNode } from "./sessionTree";
-import { rememberKeepLocal, runSync } from "./sync";
+} from "./store/sessionStore";
+import { SessionTreeProvider, TreeNode } from "./ui/sessionTree";
+import { rememberKeepLocal, runSync } from "./ops/sync";
 
 let timer: NodeJS.Timeout | undefined;
 let statusItem: vscode.StatusBarItem;

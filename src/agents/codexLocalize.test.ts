@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { localizeCodexText, materializeCodexRevision, readCodexMetaCwd } from "./codexLocalize";
-import { classifyJsonlText } from "./sessionStore";
+import { classifyJsonlText } from "../store/sessionStore";
 
 const meta = (cwd: string) =>
   JSON.stringify({

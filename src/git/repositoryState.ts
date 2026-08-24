@@ -1,5 +1,5 @@
-import type { LocalSession, MachineManifest } from "./sessionStore";
-import { STORE_FORMAT_VERSION } from "./sessionStore";
+import type { LocalSession, MachineManifest } from "../store/sessionStore";
+import { STORE_FORMAT_VERSION } from "../store/sessionStore";
 
 export type RepositoryChangeState = "backup" | "sync" | "merge" | "synced";
 

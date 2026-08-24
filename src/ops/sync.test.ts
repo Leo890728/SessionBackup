@@ -1,7 +1,7 @@
 import * as assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ManifestSession } from "./sessionStore";
-import { fileKey, newestRemoteFiles } from "./syncState";
+import { ManifestSession } from "../store/sessionStore";
+import { fileKey, newestRemoteFiles } from "../store/syncState";
 
 describe("newestRemoteFiles", () => {
   const entry = (

@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { getConfig } from "./config";
+import { getConfig } from "../config";
 import { Git } from "./git";
 import {
   BackupRepository,
@@ -7,7 +7,7 @@ import {
   selectAutomaticBackupRepo,
 } from "./githubState";
 import { remoteLabel } from "./repositoryState";
-import { STORE_FORMAT_VERSION } from "./sessionStore";
+import { STORE_FORMAT_VERSION } from "../store/sessionStore";
 
 /** 兩個 remote URL 是否指向同一個儲存庫（忽略協定、.git、大小寫）。 */
 function sameRemote(a: string, b: string): boolean {

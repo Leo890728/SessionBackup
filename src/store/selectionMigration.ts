@@ -1,6 +1,6 @@
 import { applySessionRules, SelectionTarget } from "./selection";
 import { MachineManifest } from "./sessionStore";
-import { Tool } from "./sessions";
+import { Tool } from "../agents/sessions";
 
 const TOOLS: Tool[] = ["claude", "codex"];
 

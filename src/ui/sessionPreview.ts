@@ -5,10 +5,10 @@ import {
   conversationOpenTarget,
   queueClaudeConversationHandoff,
   sameConversationWorkspace,
-} from "./sessionConversation";
-import { readTranscript, Tool } from "./sessions";
-import { previewHtml } from "./sessionPreviewHtml";
-import type { SessionSyncStatus } from "./sessionStatus";
+} from "../render/sessionConversation";
+import { readTranscript, Tool } from "../agents/sessions";
+import { previewHtml } from "../render/sessionPreviewHtml";
+import type { SessionSyncStatus } from "../store/sessionStatus";
 
 /** 同一份對話重複開啟時沿用既有面板，預覽才不會把編輯器塞滿分頁。 */
 const panels = new Map<

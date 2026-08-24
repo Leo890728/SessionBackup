@@ -3,14 +3,14 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { promisify } from "util";
-import { fallbackProject, detectProject } from "./projectIdentity";
-import { scanFiles } from "./secretScan";
+import { fallbackProject, detectProject } from "../store/projectIdentity";
+import { scanFiles } from "../security/secretScan";
 import {
   collectLocalSessions,
   machineIdFromConfig,
   ProjectRef,
   storeSessions,
-} from "./sessionStore";
+} from "../store/sessionStore";
 
 const execFileAsync = promisify(execFile);
 

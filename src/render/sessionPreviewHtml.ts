@@ -1,8 +1,8 @@
 import * as path from "path";
 import { escapeHtml } from "./htmlEscape";
 import { renderMarkdown } from "./markdownHtml";
-import { Transcript, TranscriptBlock, TranscriptMessage } from "./sessions";
-import type { SessionSyncStatus } from "./sessionStatus";
+import { Transcript, TranscriptBlock, TranscriptMessage } from "../agents/sessions";
+import type { SessionSyncStatus } from "../store/sessionStatus";
 
 /**
  * 對話預覽的 HTML。與 VS Code API 無關，方便單獨測試轉出來的標記。

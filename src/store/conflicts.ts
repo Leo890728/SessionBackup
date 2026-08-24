@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { Tool } from "./sessions";
+import { Tool } from "../agents/sessions";
 
 /** 一筆尚未解決的分叉衝突：本機檔案與遠端 revision 從同一點分叉。 */
 export interface ConflictRecord {

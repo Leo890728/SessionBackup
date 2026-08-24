@@ -1,16 +1,16 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import { ConflictRecord, ConflictRegistry } from "./conflicts";
-import { getConfig } from "./config";
-import { Git } from "./git";
+import { ConflictRecord, ConflictRegistry } from "../store/conflicts";
+import { getConfig } from "../config";
+import { Git } from "../git/git";
 import {
   findBackupRepositories,
   getSessionToken,
   tokenHeader,
-} from "./github";
-import { selectAutomaticBackupRepo } from "./githubState";
-import { ProjectMappingRegistry } from "./projectMapping";
+} from "../git/github";
+import { selectAutomaticBackupRepo } from "../git/githubState";
+import { ProjectMappingRegistry } from "../store/projectMapping";
 import {
   ChangedGroup,
   ChangedNode,
@@ -24,15 +24,15 @@ import {
   RemoteErrorKind,
   RepositoryChangeState,
   SessionChangeKind,
-} from "./repositoryState";
-import { sessionDisplayName } from "./sessionSecretScan";
+} from "../git/repositoryState";
+import { sessionDisplayName } from "../security/sessionSecretScan";
 import {
   collectLocalSessions,
   LocalSession,
   machineIdFromConfig,
   manifestRelativePath,
   readManifest,
-} from "./sessionStore";
+} from "../store/sessionStore";
 
 type RepositoryNode =
   | { kind: "checking" }

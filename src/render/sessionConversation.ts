@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import type { Tool } from "./sessions";
+import type { Tool } from "../agents/sessions";
 
 const CLAUDE_HANDOFF_FILE = "pending-claude-conversation.json";
 const CLAUDE_HANDOFF_MAX_AGE_MS = 2 * 60 * 1000;

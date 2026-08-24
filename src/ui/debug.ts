@@ -1,13 +1,13 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import { getConfig, updateSelectedSessions } from "./config";
-import { ConflictRegistry } from "./conflicts";
-import { Git } from "./git";
-import { deleteRepository, getSessionToken } from "./github";
-import { parseGithubRepo } from "./githubState";
-import { MachineIdentityStore } from "./machineIdentity";
-import { ProjectMappingRegistry } from "./projectMapping";
+import { getConfig, updateSelectedSessions } from "../config";
+import { ConflictRegistry } from "../store/conflicts";
+import { Git } from "../git/git";
+import { deleteRepository, getSessionToken } from "../git/github";
+import { parseGithubRepo } from "../git/githubState";
+import { MachineIdentityStore } from "../store/machineIdentity";
+import { ProjectMappingRegistry } from "../store/projectMapping";
 import { RepositoryTreeProvider } from "./repositoryTree";
 import { SessionTreeProvider } from "./sessionTree";
 

@@ -1,8 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import { escapeHtml } from "./htmlEscape";
-import { renderSessionMarkdown, Tool } from "./sessions";
+import { escapeHtml } from "../render/htmlEscape";
+import { renderSessionMarkdown, Tool } from "../agents/sessions";
 
 export type ConflictChoice = "A" | "B" | "skip";
 

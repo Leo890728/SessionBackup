@@ -1,6 +1,6 @@
 import * as assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { Transcript } from "./sessions";
+import { Transcript } from "../agents/sessions";
 import { formatDuration, previewHtml } from "./sessionPreviewHtml";
 
 describe("previewHtml", () => {

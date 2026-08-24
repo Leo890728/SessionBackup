@@ -1,16 +1,16 @@
 import * as vscode from "vscode";
-import { getConfig, updateSelectedSessions } from "./config";
-import { Git } from "./git";
-import { getSessionToken, tokenHeader } from "./github";
-import { ProjectMappingRegistry } from "./projectMapping";
-import { applySessionRules } from "./selection";
-import { scanSessionsForSecrets, sessionDisplayName } from "./sessionSecretScan";
+import { getConfig, updateSelectedSessions } from "../config";
+import { Git } from "../git/git";
+import { getSessionToken, tokenHeader } from "../git/github";
+import { ProjectMappingRegistry } from "../store/projectMapping";
+import { applySessionRules } from "../store/selection";
+import { scanSessionsForSecrets, sessionDisplayName } from "../security/sessionSecretScan";
 import {
   collectLocalSessions,
   isRevisionStored,
   machineIdFromConfig,
   storeSessions,
-} from "./sessionStore";
+} from "../store/sessionStore";
 
 export type BackupKind = "manual" | "auto";
 

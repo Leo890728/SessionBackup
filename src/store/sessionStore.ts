@@ -2,7 +2,7 @@ import { createHash } from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { readCodexSessionIndex } from "./codexIndex";
+import { readCodexSessionIndex } from "../agents/codexIndex";
 import {
   codexMetaCwd,
   codexOwnId,
@@ -10,10 +10,10 @@ import {
   codexSessionMeta,
   codexSubagentName,
   codexThreadId,
-} from "./codexMeta";
-import { BackupConfig, SourceConfig } from "./config";
+} from "../agents/codexMeta";
+import { BackupConfig, SourceConfig } from "../config";
 import { SelectionSet } from "./selection";
-import { Tool } from "./sessions";
+import { Tool } from "../agents/sessions";
 
 export const STORE_FORMAT_VERSION = 2;
 

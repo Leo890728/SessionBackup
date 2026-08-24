@@ -9,7 +9,7 @@ import {
   localSessionsChanged,
   remoteLabel,
 } from "./repositoryState";
-import { LocalSession, MachineManifest } from "./sessionStore";
+import { LocalSession, MachineManifest } from "../store/sessionStore";
 
 describe("remoteLabel", () => {
   it("formats HTTPS GitHub remotes", () => {

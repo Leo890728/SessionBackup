@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { scanSessionsForSecrets } from "./sessionSecretScan";
-import { LocalSession } from "./sessionStore";
+import { LocalSession } from "../store/sessionStore";
 
 describe("scanSessionsForSecrets", () => {
   it("returns only sessions containing a suspected secret", async () => {

@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
-import { getConfig, updateSelectedSessions } from "./config";
+import { getConfig, updateSelectedSessions } from "../config";
 import {
   applyRule,
   applyProjectGroupRules,
@@ -11,7 +11,7 @@ import {
   SelectionSet,
   SelectionTarget,
   sessionKey,
-} from "./selection";
+} from "../store/selection";
 import {
   ClaudeProject,
   clearSessionCache,
@@ -23,27 +23,27 @@ import {
   listCodexFiles,
   sessionProjectIdentity,
   SessionInfo,
-} from "./sessions";
+} from "../agents/sessions";
 import {
   buildStatusLookup,
   resolveSessionStatus,
   SessionSyncStatus,
   STATUS_DISPLAY,
   StatusLookup,
-} from "./sessionStatus";
-import { ProjectMappingRegistry } from "./projectMapping";
+} from "../store/sessionStatus";
+import { ProjectMappingRegistry } from "../store/projectMapping";
 import {
   machineIdFromConfig,
   manifestRelativePath,
   ProjectRef,
   readManifest,
   readMachineManifests,
-} from "./sessionStore";
+} from "../store/sessionStore";
 import {
   aggregateRemoteProjects,
   filterUnmapped,
   RemoteProject,
-} from "./unmappedProjects";
+} from "../store/unmappedProjects";
 
 type ClaudeProjectNode = {
   kind: "claudeProject";

@@ -2,13 +2,13 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { runBackup } from "./backup";
-import { upsertCodexSessionTitle } from "./codexIndex";
-import { materializeCodexRevision, readCodexMetaCwd } from "./codexLocalize";
-import { ConflictRecord, ConflictRegistry } from "./conflicts";
-import { getConfig, updateSelectedSessions } from "./config";
-import { ProjectMappingRegistry } from "./projectMapping";
-import { applySessionRules, SelectionSet, SelectionTarget } from "./selection";
-import { sessionDisplayName } from "./sessionSecretScan";
+import { upsertCodexSessionTitle } from "../agents/codexIndex";
+import { materializeCodexRevision, readCodexMetaCwd } from "../agents/codexLocalize";
+import { ConflictRecord, ConflictRegistry } from "../store/conflicts";
+import { getConfig, updateSelectedSessions } from "../config";
+import { ProjectMappingRegistry } from "../store/projectMapping";
+import { applySessionRules, SelectionSet, SelectionTarget } from "../store/selection";
+import { sessionDisplayName } from "../security/sessionSecretScan";
 import {
   classifyJsonlFiles,
   collectLocalSessions,
@@ -20,9 +20,9 @@ import {
   resolveLocalTarget,
   revisionRelativePath,
   sourceForTool,
-} from "./sessionStore";
-import { ACTIVE_WINDOW_MS } from "./sessionStore";
-import { fileKey, newestRemoteFiles } from "./syncState";
+} from "../store/sessionStore";
+import { ACTIVE_WINDOW_MS } from "../store/sessionStore";
+import { fileKey, newestRemoteFiles } from "../store/syncState";
 
 interface ResolutionRecord {
   localHash: string;
