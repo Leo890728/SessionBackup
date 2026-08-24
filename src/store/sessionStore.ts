@@ -2,6 +2,7 @@ import { createHash } from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import * as readline from "readline";
 import { readCodexSessionIndex } from "../agents/codexIndex";
 import {
   codexMetaCwd,
@@ -38,6 +39,11 @@ export interface LocalSession {
   mtimeMs: number;
   size: number;
   hash: string;
+  /**
+   * 略過本機連線紀錄之後的內容雜湊，「這段對話有沒有變」一律看它。
+   * hash 仍是原始位元組的雜湊，store 以它定址，不能混用。
+   */
+  contentHash?: string;
   title?: string;
   titleUpdatedAt?: string;
   project?: ProjectRef;
@@ -59,6 +65,8 @@ export interface ManifestSession {
   mtimeMs: number;
   size: number;
   hash: string;
+  /** 見 LocalSession.contentHash。舊 manifest 沒有這個欄位，比對時退回用 hash。 */
+  contentHash?: string;
   title?: string;
   titleUpdatedAt?: string;
   project?: ProjectRef;
@@ -87,10 +95,43 @@ function sameManifestEntryIgnoringFileStats(
     previous.id === current.id &&
     previous.relativePath === current.relativePath &&
     previous.hash === current.hash &&
+    previous.contentHash === current.contentHash &&
     previous.title === current.title &&
     previous.titleUpdatedAt === current.titleUpdatedAt &&
     JSON.stringify(previous.project) === JSON.stringify(current.project)
   );
+}
+
+/**
+ * 對話內容與 manifest 中繼資料都沒變（差別只在被濾掉的本機連線紀錄）。
+ *
+ * 舊 manifest 沒有 contentHash，這時改成拿已經備份好的 revision 現算一次：
+ * 升級之前就被點開過的對話才不用再多備份一輪。
+ */
+async function sameConversation(
+  repoPath: string,
+  previous: ManifestSession,
+  session: LocalSession
+): Promise<boolean> {
+  if (
+    previous.title !== session.title ||
+    previous.titleUpdatedAt !== session.titleUpdatedAt ||
+    JSON.stringify(previous.project) !== JSON.stringify(session.project)
+  ) {
+    return false;
+  }
+  if (previous.contentHash !== undefined) {
+    return previous.contentHash === session.contentHash;
+  }
+  const revision = path.join(
+    repoPath,
+    ...revisionRelativePath(previous.tool, previous.id, previous.hash).split("/")
+  );
+  try {
+    return (await sessionContentHash(revision)) === session.contentHash;
+  } catch {
+    return false;
+  }
 }
 
 const SESSION_ROOTS: Record<Tool, string[]> = {
@@ -151,21 +192,81 @@ export async function sha256File(file: string): Promise<string> {
   return hash.digest("hex");
 }
 
+/**
+ * Claude 在「開啟一段舊對話」時會往檔案尾巴補寫這幾種紀錄，實際觀察到的是
+ * `{"type":"atis-latch",…}`、`{"type":"bridge-session","bridgeSessionId":"cse_…"}`
+ * 與 `{"type":"mode","mode":"normal",…}`。它們是這個 client 的連線與模式狀態，
+ * 不是對話內容，但足以讓檔案雜湊改變——不濾掉的話，光是點開一段對話就會讓它
+ * 出現在「有變動的 sessions」並多備份一輪。
+ *
+ * 只收「純 client 狀態」。ai-title、last-prompt、queue-operation、file-history-*
+ * 都帶著使用者看得到或由內容衍生的東西，寧可多備份一次也不能當成沒變。
+ */
+const CLAUDE_PLUMBING_TYPES = new Set(["atis-latch", "bridge-session", "mode"]);
+
+const TYPE_PREFIX = '{"type":"';
+
+function isPlumbingRecord(line: string): boolean {
+  // 每分鐘要掃過全部 sessions，逐行 JSON.parse 太貴：這幾種紀錄都以 type 開頭，
+  // 先用字串切出型別；沒對上但行內出現這些名稱時才真的 parse 確認。
+  if (line.startsWith(TYPE_PREFIX)) {
+    const end = line.indexOf('"', TYPE_PREFIX.length);
+    if (end > 0) {
+      return CLAUDE_PLUMBING_TYPES.has(line.slice(TYPE_PREFIX.length, end));
+    }
+  }
+  if (![...CLAUDE_PLUMBING_TYPES].some((type) => line.includes(`"${type}"`))) {
+    return false;
+  }
+  try {
+    return CLAUDE_PLUMBING_TYPES.has(JSON.parse(line)?.type);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 內容雜湊：略過本機連線紀錄，並把換行正規化成 \n。
+ *
+ * 刻意與 hash 分開而不是取代它：store 是以原始位元組的雜湊定址，
+ * 複製 revision 時還會重算驗證（copyVerifiedRevision），兩者混用會讓那道檢查永遠失敗。
+ */
+export async function sessionContentHash(file: string): Promise<string> {
+  const digest = createHash("sha256");
+  const input = fs.createReadStream(file, { encoding: "utf8" });
+  const lines = readline.createInterface({ input, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      if (isPlumbingRecord(line)) {
+        continue;
+      }
+      digest.update(line + "\n");
+    }
+  } finally {
+    input.destroy();
+  }
+  return digest.digest("hex");
+}
+
 // SHA-256 以 mtime+size 快取：狀態掃描每分鐘都會收集全部 sessions，
 // 沒有快取的話等於每分鐘重算約 100MB 的雜湊。
-const hashCache = new Map<string, { mtimeMs: number; size: number; hash: string }>();
+const hashCache = new Map<
+  string,
+  { mtimeMs: number; size: number; hash: string; contentHash: string }
+>();
 
 export async function hashFileCached(
   file: string,
   stat: { mtimeMs: number; size: number }
-): Promise<string> {
+): Promise<{ hash: string; contentHash: string }> {
   const cached = hashCache.get(file);
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-    return cached.hash;
+    return { hash: cached.hash, contentHash: cached.contentHash };
   }
   const hash = await sha256File(file);
-  hashCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, hash });
-  return hash;
+  const contentHash = await sessionContentHash(file);
+  hashCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, hash, contentHash });
+  return { hash, contentHash };
 }
 
 export function classifyJsonlText(localText: string, remoteText: string): MergeRelation {
@@ -257,7 +358,7 @@ export async function collectLocalSessions(
           relativePath,
           mtimeMs: stat.mtimeMs,
           size: stat.size,
-          hash: await hashFileCached(file, stat),
+          ...(await hashFileCached(file, stat)),
           ...(codexTitle
             ? { title: codexTitle.thread_name, titleUpdatedAt: codexTitle.updated_at }
             : {}),
@@ -315,6 +416,16 @@ export async function storeSessions(
       skipped.push(session);
       continue;
     }
+    const stored = previousByPath.get(`${session.tool}:${session.relativePath}`);
+    // 檔案變了但對話沒變（Claude 開啟舊對話時補寫的連線紀錄）：沿用上一輪的 revision，
+    // 不然每點開一次舊對話就會多備份一輪一模一樣的內容。
+    if (stored && (await sameConversation(repoPath, stored, session))) {
+      // 補上 contentHash，下一輪就不必再為了這筆重讀 revision。
+      manifestSessions.push(
+        stored.contentHash ? stored : { ...stored, contentHash: session.contentHash }
+      );
+      continue;
+    }
     const rel = revisionRelativePath(session.tool, session.id, session.hash);
     const destination = path.join(repoPath, ...rel.split("/"));
     if (!fs.existsSync(destination)) {
@@ -337,6 +448,7 @@ export async function storeSessions(
       mtimeMs: session.mtimeMs,
       size: session.size,
       hash: session.hash,
+      ...(session.contentHash ? { contentHash: session.contentHash } : {}),
       ...(session.title
         ? { title: session.title, titleUpdatedAt: session.titleUpdatedAt }
         : {}),
@@ -473,6 +585,8 @@ function jsonlRecords(text: string): string[] {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
+    // 本機連線紀錄不算對話的一部分：留著會讓「只是被點開過」的檔案看起來比遠端新。
+    .filter((line) => !isPlumbingRecord(line))
     .map(canonicalRecord);
 }
 

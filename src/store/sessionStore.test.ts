@@ -8,6 +8,7 @@ import {
   collectLocalSessions,
   resolveLocalTarget,
   safeSegment,
+  sessionContentHash,
   sha256File,
   storeSessions,
 } from "./sessionStore";
@@ -37,6 +38,17 @@ describe("classifyJsonlText", () => {
     const local = `${first}\n${line("2", "local")}`;
     const remote = `${first}\n${line("3", "remote")}`;
     assert.equal(classifyJsonlText(local, remote), "conflict");
+  });
+
+  it("ignores Claude's connection bookkeeping instead of calling it a local continuation", () => {
+    const conversation = line("1", "hello");
+    const opened =
+      `${conversation}\n` +
+      JSON.stringify({ type: "atis-latch", atis: "", sessionId: "s" }) +
+      "\n" +
+      JSON.stringify({ type: "bridge-session", sessionId: "s", bridgeSessionId: "cse_1" }) +
+      "\n";
+    assert.equal(classifyJsonlText(opened, conversation), "same");
   });
 });
 
@@ -81,6 +93,89 @@ describe("storeSessions", () => {
       ]);
       assert.deepEqual(second.copied, []);
       assert.equal(second.manifest.updatedAt, first.manifest.updatedAt);
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the stored revision when only Claude's connection bookkeeping was appended", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "session-store-test-"));
+    const source = path.join(root, "source.jsonl");
+    await fs.promises.writeFile(source, line("1", "hello") + "\n");
+    const session = {
+      tool: "claude" as const,
+      id: "session-1",
+      file: source,
+      relativePath: "projects/test/session-1.jsonl",
+      mtimeMs: 1,
+      size: (await fs.promises.stat(source)).size,
+      hash: await sha256File(source),
+      contentHash: await sessionContentHash(source),
+    };
+    try {
+      const first = await storeSessions(root, "machine-a", [session], 1024 * 1024);
+      // 點開這段對話：Claude 補寫連線紀錄，檔案的原始 hash 因此改變。
+      await fs.promises.appendFile(
+        source,
+        JSON.stringify({ type: "bridge-session", sessionId: "session-1" }) + "\n"
+      );
+      const opened = {
+        ...session,
+        mtimeMs: 999,
+        size: (await fs.promises.stat(source)).size,
+        hash: await sha256File(source),
+        contentHash: await sessionContentHash(source),
+      };
+      assert.notEqual(opened.hash, session.hash);
+      assert.equal(opened.contentHash, session.contentHash);
+
+      const second = await storeSessions(root, "machine-a", [opened], 1024 * 1024);
+      assert.deepEqual(second.copied, []);
+      assert.equal(second.manifest.sessions[0].hash, session.hash);
+      assert.equal(second.manifest.updatedAt, first.manifest.updatedAt);
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("recognises the same conversation against a manifest written before contentHash existed", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "session-store-test-"));
+    const source = path.join(root, "source.jsonl");
+    await fs.promises.writeFile(source, line("1", "hello") + "\n");
+    // 舊版備份出來的 manifest：只有原始 hash，沒有 contentHash。
+    const legacy = {
+      tool: "claude" as const,
+      id: "session-1",
+      file: source,
+      relativePath: "projects/test/session-1.jsonl",
+      mtimeMs: 1,
+      size: (await fs.promises.stat(source)).size,
+      hash: await sha256File(source),
+    };
+    try {
+      const first = await storeSessions(root, "machine-a", [legacy], 1024 * 1024);
+      assert.equal(first.manifest.sessions[0].contentHash, undefined);
+
+      await fs.promises.appendFile(
+        source,
+        JSON.stringify({ type: "mode", mode: "normal", sessionId: "session-1" }) + "\n"
+      );
+      const opened = {
+        ...legacy,
+        mtimeMs: 999,
+        size: (await fs.promises.stat(source)).size,
+        hash: await sha256File(source),
+        contentHash: await sessionContentHash(source),
+      };
+      const second = await storeSessions(root, "machine-a", [opened], 1024 * 1024);
+
+      // 不寫新 revision，但補上 contentHash，所以 manifest 本身有更新。
+      assert.deepEqual(
+        second.copied.filter((rel) => rel.startsWith("store/")),
+        []
+      );
+      assert.equal(second.manifest.sessions[0].hash, legacy.hash);
+      assert.equal(second.manifest.sessions[0].contentHash, opened.contentHash);
     } finally {
       await fs.promises.rm(root, { recursive: true, force: true });
     }

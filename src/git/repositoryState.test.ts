@@ -285,4 +285,36 @@ describe("listChangedSessions", () => {
     const changed = listChangedSessions([session("a", "sessions/a.jsonl", "h")], undefined);
     assert.deepEqual(changed.map((c) => c.change), ["added"]);
   });
+
+  it("ignores a file whose only change is Claude's connection bookkeeping", () => {
+    // 點開一段舊對話 → Claude 補寫 atis-latch/bridge-session → 原始 hash 變了，
+    // 但 contentHash 已經濾掉那幾行，所以對話本身沒變，不該列進變動清單。
+    const opened = {
+      ...session("a", "projects/a.jsonl", "raw-after"),
+      contentHash: "content-1",
+    };
+    const manifest: MachineManifest = {
+      formatVersion: 2,
+      machineId: "m",
+      updatedAt: "2026-07-15T00:00:00Z",
+      sessions: [
+        {
+          tool: "codex",
+          id: "a",
+          relativePath: "projects/a.jsonl",
+          mtimeMs: 1,
+          size: 10,
+          hash: "raw-before",
+          contentHash: "content-1",
+        },
+      ],
+    };
+    assert.deepEqual(listChangedSessions([opened], manifest), []);
+
+    const replied = { ...opened, contentHash: "content-2" };
+    assert.deepEqual(
+      listChangedSessions([replied], manifest).map((c) => c.change),
+      ["modified"]
+    );
+  });
 });

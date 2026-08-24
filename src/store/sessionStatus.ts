@@ -104,9 +104,10 @@ export function sessionSyncStatus(
 
 /**
  * 樹狀圖用：sessionSyncStatus 只比 mtime+size（stat 便宜、不用讀檔），
- * 但 Claude 讀歷史會把同樣的內容重寫一次、只推進 mtime，那樣會誤標成未同步。
- * 只有在 size 相同而 mtime 不同這個可疑情況下才實際算 hash（hashFileCached 有快取，
- * 同一次改動只會算一次）。
+ * 但 Claude 開啟舊對話時會重寫檔案——有時只推進 mtime，有時還會補寫幾行連線紀錄
+ * （見 sessionStore 的 CLAUDE_PLUMBING_TYPES），兩種都會被誤標成未同步。
+ * 所以 mtime/size 一對不上就實際算一次雜湊，以濾掉連線紀錄的 contentHash 為準
+ * （hashFileCached 有快取，同一次改動只會算一次）。
  */
 export async function resolveSessionStatus(
   lookup: StatusLookup,
@@ -125,15 +126,19 @@ export async function resolveSessionStatus(
     return status;
   }
   const entry = lookup.byPath.get(`${session.tool}:${session.relativePath}`);
-  if (!entry || entry.size !== session.size) {
+  if (!entry) {
     return status;
   }
   try {
-    const hash = await hashFileCached(session.file, {
+    const { hash, contentHash } = await hashFileCached(session.file, {
       mtimeMs: session.mtimeMs,
       size: session.size,
     });
-    return hash === entry.hash ? "synced" : "modified";
+    // 舊 manifest 沒有 contentHash，退回比原始位元組（就是這次改動之前的行為）。
+    const unchanged = entry.contentHash
+      ? entry.contentHash === contentHash
+      : hash === entry.hash;
+    return unchanged ? "synced" : "modified";
   } catch {
     return status;
   }
