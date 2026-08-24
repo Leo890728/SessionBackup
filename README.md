@@ -8,7 +8,7 @@
 VS Code 擴充功能：以 append-only 格式備份 Claude Code 與 Codex 的 JSONL session，
 並在多台電腦之間安全合併。每份內容以 SHA-256 建立不可變 revision，
 同步流程完全非互動，衝突不跳視窗而是收進側欄等你有空再處理。
-預設本地備份庫是 `~/.session-backup-v2`。
+預設本地備份庫是 `~/.session-backup`。
 
 > 0.2 起採綠地格式，不讀取或遷移舊版鏡像備份。請使用新的本地路徑與新的私人儲存庫。
 
@@ -65,7 +65,7 @@ graph TD
     UI --> CORE
 ```
 
-備份庫（`~/.session-backup-v2`）本身就是一個 git repo，內容格式為：
+備份庫（`~/.session-backup`）本身就是一個 git repo，內容格式為：
 
 ```text
 format.json
@@ -202,8 +202,10 @@ Codex 標題（`session_index.jsonl`）以 `updated_at` 新者勝，不會被其
 Claude Code 以本機專案路徑區分 session。擴充功能不把 A 電腦的 project bucket 直接複製到 B，
 而是使用跨機 `projectId`：
 
-- Git 專案：由正規化 Git remote 的 hash 加上 repository-relative workspace path 產生，
-  可自動對應不同 checkout 路徑與 monorepo 子目錄。
+- 有 remote 的 Git 專案：由正規化 Git remote 的 hash 加上 repository-relative
+  workspace path 產生（`git-<hash>`），可自動對應不同 checkout 路徑與 monorepo 子目錄。
+- 沒有 remote 的 Git 專案：改用 root commit（`root-<hash>`）。clone 或整包複製過去的
+  同一個 repo 在兩台電腦仍算同一個專案，即使還沒 push。
 - 非 Git 專案：第一次在另一台電腦同步時要求選擇本機資料夾。
 - 本機對應保存於 VS Code extension global storage 的 `project-mappings.json`，
   不會 commit 到共享備份庫。
@@ -214,8 +216,10 @@ Claude Code 以本機專案路徑區分 session。擴充功能不把 A 電腦的
 點擊才進入「使用目前工作區 / 選擇本機資料夾」，指定後自動再同步一次。之後可執行
 **Session Backup: 管理 Claude 專案對應...** 重新定位或移除對應。
 
-備份當下 checkout 若還沒有 `remote.origin.url`，`projectId` 會退回以絕對路徑計算的
-`local-<hash>`，跨機必然配不上，只能手動指定一次。
+完全不是 git repo（或還沒有任何 commit）時，`projectId` 才會退回以絕對路徑計算的
+`local-<hash>`，跨機必然配不上，只能手動指定一次。專案身分是第一次見到它時定下來的，
+但只要還停在 `local-`，之後每次備份都會再偵測一次 git；等到那個資料夾 `git init`
+或加上 remote，身分就會自動升級（每次執行只重試一次，不會拖慢備份）。
 
 共享 store 仍保存未修改的原始 JSONL；JSONL 本身可能含來源電腦的 `cwd`。匯入 B 時
 只改變 materialize 位置，不全文取代對話或工具輸出中的路徑。
@@ -225,7 +229,7 @@ Claude Code 以本機專案路徑區分 session。擴充功能不把 A 電腦的
 Codex 以 `session_meta.payload.cwd` 決定 session 屬於哪個工作目錄 — A 電腦在 `C:\`、
 B 電腦在 `D:\` 時，這個欄位視為**機器本地屬性**處理：
 
-- manifest 對 codex session 也記錄跨機 `projectId`（git remote hash 推導，
+- manifest 對 codex session 也記錄跨機 `projectId`（remote 或 root commit 推導，
   與 Claude 共用同一套專案映射）。
 - **匯入**其他電腦的 session 時，若本機已有對應專案，`session_meta.cwd` 會改寫成本機路徑，
   Codex 才能在本機工作目錄列出它；找不到映射就保持原樣。
@@ -290,7 +294,7 @@ B 電腦在 `D:\` 時，這個欄位視為**機器本地屬性**處理：
 | `Session Backup: 管理 Claude 專案對應...` | 重新定位、開啟或移除本機 projectId 對應 |
 | `Session Backup: 管理要備份的對話...` | 檢視選取規則，勾選即可刪除 |
 | `Session Backup: 重新登入 GitHub` | 換用另一個 GitHub 帳號 |
-| `Session Backup: 開啟本地備份儲存庫資料夾` | 開啟 `~/.session-backup-v2` |
+| `Session Backup: 開啟本地備份儲存庫資料夾` | 開啟 `~/.session-backup` |
 | `Session Backup: 顯示記錄` | 顯示輸出面板 |
 
 開啟 `sessionBackup.debugCommands` 後另有三個具破壞性的除錯命令（刪除遠端備份儲存庫／
@@ -301,7 +305,7 @@ B 電腦在 `D:\` 時，這個欄位視為**機器本地屬性**處理：
 
 | 設定 | 預設 | 說明 |
 | --- | --- | --- |
-| `sessionBackup.repoPath` | `""` | 本地備份 Git 儲存庫路徑，留空為 `~/.session-backup-v2` |
+| `sessionBackup.repoPath` | `""` | 本地備份 Git 儲存庫路徑，留空為 `~/.session-backup` |
 | `sessionBackup.repoName` | `agent-session-backup` | 建立或尋找備份儲存庫時的名稱；連接之後改它不會換 repo |
 | `sessionBackup.machineId` | `""` | 此電腦在備份庫中的識別名稱，machine-scoped、不隨 Settings Sync |
 | `sessionBackup.autoBackupMinutes` | `30` | 自動備份間隔（分鐘），0 表示停用 |

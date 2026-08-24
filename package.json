@@ -2,7 +2,7 @@
   "name": "session-backup",
   "displayName": "AI Session Backup",
   "description": "以 append-only 格式備份並跨電腦合併 Claude Code 與 Codex session",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "publisher": "lin24362525",
   "private": true,
   "license": "MIT",
@@ -245,7 +245,7 @@
         "sessionBackup.repoPath": {
           "type": "string",
           "default": "",
-          "description": "本地備份 Git 儲存庫路徑，留空表示 ~/.session-backup-v2"
+          "description": "本地備份 Git 儲存庫路徑，留空表示 ~/.session-backup"
         },
         "sessionBackup.repoName": {
           "type": "string",

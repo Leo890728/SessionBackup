@@ -16,7 +16,7 @@ const execFileAsync = promisify(execFile);
 
 async function main(): Promise<void> {
   const home = os.homedir();
-  const repoPath = path.join(home, ".session-backup-v2");
+  const repoPath = path.join(home, ".session-backup");
   const cfg = {
     repoPath,
     repoName: "agent-session-backup",

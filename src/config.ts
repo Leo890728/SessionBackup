@@ -34,7 +34,7 @@ export function getConfig(): BackupConfig {
   const c = vscode.workspace.getConfiguration("sessionBackup");
   const repoPath =
     expandHome(c.get<string>("repoPath", "")) ||
-    path.join(os.homedir(), ".session-backup-v2");
+    path.join(os.homedir(), ".session-backup");
   const sources = c.get<SourceConfig[]>("sources", []).map((s) => ({
     name: s.name,
     path: expandHome(s.path),
