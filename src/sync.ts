@@ -8,7 +8,6 @@ import { ConflictRecord, ConflictRegistry } from "./conflicts";
 import { getConfig, updateSelectedSessions } from "./config";
 import { ProjectMappingRegistry } from "./projectMapping";
 import { applySessionRules, SelectionSet, SelectionTarget } from "./selection";
-import { SecretVault } from "./sessionRedact";
 import { sessionDisplayName } from "./sessionSecretScan";
 import {
   classifyJsonlFiles,
@@ -54,11 +53,11 @@ export async function runSync(
   out: vscode.OutputChannel,
   projects: ProjectMappingRegistry,
   conflicts: ConflictRegistry,
-  options?: { interactive?: boolean; vault?: SecretVault }
+  options?: { interactive?: boolean }
 ): Promise<SyncSummary> {
   const interactive = options?.interactive ?? true;
   const cfg = getConfig();
-  await runBackup(out, interactive ? "manual" : "auto", projects, options?.vault);
+  await runBackup(out, interactive ? "manual" : "auto", projects);
   const machineId = machineIdFromConfig(cfg);
   const manifests = (await readMachineManifests(cfg.repoPath)).filter(
     (manifest) => manifest.machineId !== machineId
@@ -251,7 +250,7 @@ export async function runSync(
     await updateSelectedSessions((current) => applySessionRules(current, adopted, true));
   }
   if (summary.added || summary.updated) {
-    await runBackup(out, interactive ? "manual" : "auto", projects, options?.vault);
+    await runBackup(out, interactive ? "manual" : "auto", projects);
   }
   return summary;
 }

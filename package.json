@@ -84,10 +84,6 @@
         "title": "Session Backup: 開啟本地備份儲存庫資料夾"
       },
       {
-        "command": "sessionBackup.restoreSecrets",
-        "title": "Session Backup: 還原遮蔽的金鑰..."
-      },
-      {
         "command": "sessionBackup.showLog",
         "title": "Session Backup: 顯示記錄"
       },

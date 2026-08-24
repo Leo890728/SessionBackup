@@ -9,7 +9,6 @@ import { parseGithubRepo } from "./githubState";
 import { MachineIdentityStore } from "./machineIdentity";
 import { ProjectMappingRegistry } from "./projectMapping";
 import { RepositoryTreeProvider } from "./repositoryTree";
-import { SecretVault } from "./sessionRedact";
 import { SessionTreeProvider } from "./sessionTree";
 
 /**
@@ -22,7 +21,6 @@ export interface DebugDeps {
   out: vscode.OutputChannel;
   projects: ProjectMappingRegistry;
   conflicts: ConflictRegistry;
-  vault: SecretVault;
   repository: RepositoryTreeProvider;
   tree: SessionTreeProvider;
   /** 清掉 lastBackup 之後重畫狀態列 */
@@ -185,7 +183,7 @@ async function signOutGithub(deps: DebugDeps): Promise<void> {
 // ---- 刪除本機備份資料 ----
 
 interface LocalTarget extends vscode.QuickPickItem {
-  id: "repo" | "state" | "vault" | "selection";
+  id: "repo" | "state" | "selection";
 }
 
 async function deleteLocalData(deps: DebugDeps): Promise<void> {
@@ -205,12 +203,6 @@ async function deleteLocalData(deps: DebugDeps): Promise<void> {
       description: "專案對應、衝突紀錄、machineId、上次備份時間",
       detail: "刪除後專案對應要重新指定，machineId 會重新產生",
       picked: true,
-    },
-    {
-      id: "vault",
-      label: "遮蔽金鑰保險庫",
-      description: "secret-vault.json",
-      detail: "刪除後「還原遮蔽的金鑰」再也找不回被遮蔽的原文",
     },
     {
       id: "selection",
@@ -267,12 +259,6 @@ async function deleteLocalData(deps: DebugDeps): Promise<void> {
     deps.refreshStatus();
     deps.out.appendLine("已刪除擴充功能狀態（專案對應、衝突紀錄、machineId）");
     done.push("擴充功能狀態");
-  }
-  if (ids.has("vault")) {
-    await fs.promises.rm(deps.vault.storagePath, { force: true });
-    deps.vault.reset();
-    deps.out.appendLine("已刪除遮蔽金鑰保險庫");
-    done.push("遮蔽金鑰保險庫");
   }
   if (ids.has("selection")) {
     await updateSelectedSessions(() => []);

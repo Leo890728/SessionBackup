@@ -4,7 +4,6 @@ import { Git } from "./git";
 import { getSessionToken, tokenHeader } from "./github";
 import { ProjectMappingRegistry } from "./projectMapping";
 import { applySessionRules } from "./selection";
-import { redactSessions, SecretVault } from "./sessionRedact";
 import { scanSessionsForSecrets, sessionDisplayName } from "./sessionSecretScan";
 import {
   collectLocalSessions,
@@ -21,30 +20,114 @@ export interface BackupOutcome {
   message: string;
 }
 
-let running = false;
+/**
+ * 自動備份的機密確認是右下角的通知，使用者可以完全不理它，而通知不會自己消失。
+ * 時間到就先放掉這次備份：不然這個 runBackup 會一直沒有結束，
+ * 之後的備份與自動同步全部卡在「另一個備份正在進行中」。
+ */
+const AUTO_SECRET_PROMPT_TIMEOUT_MS = 5 * 60_000;
+
+/** 進行中的備份；沒有備份在跑時是 undefined。 */
+let current: Promise<BackupOutcome> | undefined;
+/** 正在等待回應、而且可以被放掉的機密確認通知（只有自動備份的非強制通知會有）。 */
+let pendingSecretPrompt: { dismiss: () => void } | undefined;
 
 export async function runBackup(
   out: vscode.OutputChannel,
   kind: BackupKind,
-  projects?: ProjectMappingRegistry,
-  vault?: SecretVault
+  projects?: ProjectMappingRegistry
 ): Promise<BackupOutcome> {
-  if (running) {
-    return { committed: false, pushed: false, message: "另一個備份正在進行中" };
+  while (current) {
+    // 使用者沒理自動備份的機密確認通知，卻自己按了備份：手動這次才是他現在的意圖，
+    // 先放掉卡住的那次再接手，否則在通知逾時之前手動備份都只會被擋掉。
+    if (kind !== "manual" || !pendingSecretPrompt) {
+      return {
+        committed: false,
+        pushed: false,
+        message: pendingSecretPrompt
+          ? "上一次備份還在等待機密確認的回覆"
+          : "另一個備份正在進行中",
+      };
+    }
+    out.appendLine("上一次備份還在等待機密確認，改由這次手動備份接手");
+    pendingSecretPrompt.dismiss();
+    await current.catch(() => undefined);
   }
-  running = true;
+  const run = doBackup(out, kind, projects);
+  current = run;
   try {
-    return await doBackup(out, kind, projects, vault);
+    return await run;
   } finally {
-    running = false;
+    if (current === run) {
+      current = undefined;
+    }
   }
+}
+
+/**
+ * 機密確認的提問。手動備份用強制回應的對話框（一定會有答案）；
+ * 自動備份用右下角通知，除了使用者的選擇之外，還可能被逾時或後續的手動備份放掉，
+ * 兩種情況都當成「沒有答案」，也就是取消這次備份。
+ */
+async function askSecretDecision(
+  out: vscode.OutputChannel,
+  modal: boolean,
+  message: string,
+  detail: string,
+  items: readonly string[]
+): Promise<string | undefined> {
+  const prompt = Promise.resolve(
+    vscode.window.showWarningMessage(message, { modal, detail }, ...items)
+  );
+  if (modal) {
+    return prompt;
+  }
+  return new Promise<string | undefined>((resolve) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (pick: string | undefined, note?: string): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      pendingSecretPrompt = undefined;
+      if (note) {
+        out.appendLine(note);
+      }
+      resolve(pick);
+    };
+    timer = setTimeout(
+      () =>
+        finish(
+          undefined,
+          "機密確認通知逾時未回應，這次備份先取消（下次備份會再問一次）"
+        ),
+      AUTO_SECRET_PROMPT_TIMEOUT_MS
+    );
+    pendingSecretPrompt = {
+      dismiss: () => finish(undefined, "機密確認通知未回應，已由新的備份接手"),
+    };
+    void prompt.then((pick) => {
+      if (settled) {
+        // 通知不會自己消失，所以放掉之後還是點得下去；那次備份已經結束了，
+        // 這裡只能記錄，實際的決定要等下一次備份重新詢問。
+        out.appendLine(
+          `機密確認在這次備份結束後才被點選（${pick ?? "關閉"}），已忽略；請重新備份`
+        );
+        return;
+      }
+      finish(pick);
+    });
+  });
 }
 
 async function doBackup(
   out: vscode.OutputChannel,
   kind: BackupKind,
-  projects?: ProjectMappingRegistry,
-  vault?: SecretVault
+  projects?: ProjectMappingRegistry
 ): Promise<BackupOutcome> {
   const cfg = getConfig();
   if (!cfg.selectedSessions.length) {
@@ -98,8 +181,6 @@ async function doBackup(
             findings.map((finding) => `${finding.kind}（第 ${finding.line} 行）`).join("、")
         )
         .join("\n");
-      const redactLabel =
-        secretMatches.length === 1 ? "遮蔽後備份" : `遮蔽後備份（${secretMatches.length} 個）`;
       const skipLabel =
         secretMatches.length === 1
           ? "跳過此次"
@@ -109,46 +190,16 @@ async function doBackup(
           ? "取消選取此 session"
           : `取消選取這 ${secretMatches.length} 個 sessions`;
       out.appendLine("含疑似機密的 sessions：\n" + detail);
-      // 遮蔽排第一是預設建議；但它會改寫原始檔，所以只在使用者明確點下去時才做，
-      // 其餘選項（跳過／取消選取／仍要全部備份）維持原樣，不遮蔽永遠是可選的。
-      const pick = await vscode.window.showWarningMessage(
+      // 備份庫沒有刪除機制，金鑰一旦推上去就等於外流，所以其餘選項都是「先不要上傳」；
+      // 「仍要全部備份」永遠留著，誤判時不該逼使用者去關掉整個掃描。
+      const pick = await askSecretDecision(
+        out,
+        kind === "manual",
         `Session Backup: 在 ${secretMatches.length} 個 session 偵測到疑似金鑰/憑證`,
-        { modal: kind === "manual", detail },
-        ...(vault ? [redactLabel] : []),
-        skipLabel,
-        deselectLabel,
-        "仍要全部備份",
-        "取消此次備份"
+        detail,
+        [skipLabel, deselectLabel, "仍要全部備份", "取消此次備份"]
       );
-      if (pick === redactLabel && vault) {
-        const outcome = await redactSessions(
-          secretMatches.map((match) => match.session),
-          vault
-        );
-        const updated = new Map(
-          outcome.redacted.map((session) => [session.file, session])
-        );
-        // 使用中或收集後又變動的檔案這輪不動，也不備份——內容還沒遮就上傳等於沒遮。
-        const held = new Set(
-          outcome.skipped.map((entry) => entry.session.file)
-        );
-        sessions = sessions
-          .map((session) => updated.get(session.file) ?? session)
-          .filter((session) => !held.has(session.file));
-        skippedSecretCount = outcome.skipped.length;
-        out.appendLine(
-          `已就地遮蔽 ${outcome.redacted.length} 個 session、共 ${outcome.count} 個憑證；` +
-            `原文保存在 ${vault.storagePath}（不會進備份庫）`
-        );
-        for (const entry of outcome.skipped) {
-          out.appendLine(
-            `未遮蔽 ${entry.session.file}：` +
-              { active: "檔案使用中，下次備份再處理", changed: "掃描後檔案又有變動", "no-match": "重新讀取時已無命中", error: `失敗 — ${entry.error}` }[
-                entry.reason
-              ]
-          );
-        }
-      } else if (pick === skipLabel) {
+      if (pick === skipLabel) {
         const skippedFiles = new Set(secretMatches.map((match) => match.session.file));
         sessions = sessions.filter((session) => !skippedFiles.has(session.file));
         skippedSecretCount = secretMatches.length;

@@ -80,6 +80,13 @@ export class RepositoryTreeProvider
 {
   private readonly emitter = new vscode.EventEmitter<RepositoryNode | undefined>();
   readonly onDidChangeTreeData = this.emitter.event;
+  private readonly localRepoChanged = new vscode.EventEmitter<void>();
+  /**
+   * 掃描時動到本地備份庫（自動接上遠端、或從遠端還原）就會觸發。
+   * 這時 Sessions 側欄看得到的東西才剛出現（例如剛登入 GitHub 之後的雲端專案），
+   * 但它自己不知道，要靠這個事件去重讀。
+   */
+  readonly onDidChangeLocalRepository = this.localRepoChanged.event;
   private node: RepositoryNode = { kind: "checking" };
   /** 變動清單的頂層列（每個 thread 一列，單檔 session 就是它自己）。 */
   private changed: RepositoryNode[] = [];
@@ -93,6 +100,8 @@ export class RepositoryTreeProvider
   private scanning = false;
   private rescanRequested = false;
   private requestRemoteCheck = false;
+  /** 這次掃描動過本地備份庫，掃完要通知外面。 */
+  private localRepoTouched = false;
 
   constructor(
     private readonly out: vscode.OutputChannel,
@@ -126,6 +135,7 @@ export class RepositoryTreeProvider
     clearInterval(this.remoteTimer);
     this.disposeWatchers();
     this.emitter.dispose();
+    this.localRepoChanged.dispose();
   }
 
   getTreeItem(node: RepositoryNode): vscode.TreeItem {
@@ -457,6 +467,10 @@ export class RepositoryTreeProvider
     } finally {
       this.scanning = false;
       this.emitter.fire(undefined);
+      if (this.localRepoTouched) {
+        this.localRepoTouched = false;
+        this.localRepoChanged.fire();
+      }
       if (this.rescanRequested || this.requestRemoteCheck) {
         this.rescanRequested = false;
         this.scheduleScan(this.requestRemoteCheck, LOCAL_SCAN_DELAY_MS);
@@ -479,6 +493,7 @@ export class RepositoryTreeProvider
           await git.ensureRepo();
           await git.setRemote(recovered.url);
           remote = recovered.url;
+          this.localRepoTouched = true;
           this.out.appendLine(`已自動重新連接 GitHub：${recovered.fullName}`);
         }
       }
@@ -517,6 +532,7 @@ export class RepositoryTreeProvider
     if (headCheck.code !== 0) {
       const restore = await git.run(["checkout", "-B", remoteBranch, remoteRef], true);
       if (restore.code === 0) {
+        this.localRepoTouched = true;
         this.out.appendLine(`已自動從 ${remoteRef} 還原本地備份庫`);
       } else {
         this.out.appendLine(
