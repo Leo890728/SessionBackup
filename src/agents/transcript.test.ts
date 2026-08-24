@@ -94,6 +94,8 @@ describe("readTranscript", () => {
             role: "assistant",
             blocks: [{ kind: "thinking", text: "先想一下" }],
             timestamp: undefined,
+            // 第三筆紀錄（前兩筆是被略過的 meta 提問）。
+            sourceLine: 2,
           },
         ]);
       }
@@ -176,6 +178,8 @@ describe("readTranscript (codex)", () => {
         assert.deepEqual(transcript.messages[1], {
           role: "assistant",
           timestamp: "2026-07-14T01:00:01Z",
+          // 這一輪從 reasoning 那筆開始（session_meta、提問各佔一筆）。
+          sourceLine: 2,
           blocks: [
             {
               kind: "work",

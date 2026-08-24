@@ -115,6 +115,11 @@ export interface TranscriptMessage {
   blocks: TranscriptBlock[];
   /** 這則訊息第一段內容的時間（Codex 的部分紀錄沒有時間欄位）。 */
   timestamp?: string;
+  /**
+   * 產生這則訊息的第一筆 JSONL 紀錄在檔案中的序號（以 readAllLines 的陣列為準）。
+   * 預覽靠它把「已備份到哪裡」的橫桿放在對的位置。
+   */
+  sourceLine?: number;
 }
 
 export interface Transcript {

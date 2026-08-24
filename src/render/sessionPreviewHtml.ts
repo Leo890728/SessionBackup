@@ -18,6 +18,11 @@ export interface PreviewAssets {
 export interface PreviewState {
   /** unbacked 代表 manifest 尚無此 session，modified 代表備份後又有新內容。 */
   status: SessionSyncStatus;
+  /**
+   * 已備份內容在這個檔案裡的長度（JSONL 紀錄數）。橫桿掛在第一則由更後面的
+   * 紀錄產生的訊息之前；沒給就當作 0，也就是整份都算新的。
+   */
+  backedUpRecords?: number;
 }
 
 /**
@@ -49,9 +54,6 @@ export function previewHtml(
     : `<div class="avatar avatar-mark" aria-hidden="true">${
         transcript.tool === "claude" ? "✳" : "◇"
       }</div>`;
-  const body =
-    transcript.messages.map((message) => messageHtml(message, avatar)).join("\n") ||
-    '<p class="empty">這份對話沒有可顯示的訊息。</p>';
   const imageSource = assets.imageSource ? ` img-src ${assets.imageSource};` : "";
   const divider = state ? DIVIDERS[state.status] : undefined;
   const statusDivider = divider
@@ -59,6 +61,12 @@ export function previewHtml(
       <div class="status-divider-inner"><span>${divider.label}</span></div>
     </div>`
     : "";
+  const body = threadHtml(
+    transcript.messages,
+    avatar,
+    statusDivider,
+    state?.backedUpRecords ?? 0
+  );
   const openConversationButton = `<button id="open-conversation" class="conversation-button" type="button" title="在 ${toolName} 開啟此 session">在對話開啟</button>`;
 
   return `<!doctype html>
@@ -89,7 +97,6 @@ export function previewHtml(
         </div>
       </div>
     </header>
-    ${statusDivider}
   </div>
   <main class="thread">
     ${body}
@@ -98,6 +105,14 @@ export function previewHtml(
   </div>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
+    // 標題列高度會隨標題換行改變，量到多少就讓橫桿黏在多少的位置。
+    const header = document.querySelector('.sticky-header');
+    const syncHeaderHeight = () =>
+      document.documentElement.style.setProperty('--header-h', header.offsetHeight + 'px');
+    syncHeaderHeight();
+    new ResizeObserver(syncHeaderHeight).observe(header);
+    // 開啟時停在最新的訊息：對話是往下長的，最後一則幾乎都是使用者要看的那則。
+    window.scrollTo({ top: document.body.scrollHeight });
     document.getElementById('reload').addEventListener('click', () => vscode.postMessage({ command: 'reload' }));
     document.getElementById('open-conversation')?.addEventListener('click', () => vscode.postMessage({ command: 'open-conversation' }));
     document.addEventListener('click', (event) => {
@@ -109,6 +124,41 @@ export function previewHtml(
   </script>
 </body>
 </html>`;
+}
+
+/**
+ * 訊息串，並把「新內容從這裡開始」的橫桿插在對的位置。
+ *
+ * 位置由產生訊息的那筆 JSONL 紀錄序號決定：第一則序號 >= 已備份長度的訊息之前。
+ * 整份都還沒備份時 backedUpRecords 是 0，橫桿自然落在最上面；新內容不對應任何
+ * 可顯示的訊息時（例如只多了標題紀錄）掛到最後，總比整條消失讓人以為沒事好。
+ */
+function threadHtml(
+  messages: TranscriptMessage[],
+  avatar: string,
+  divider: string,
+  backedUpRecords: number
+): string {
+  if (!messages.length) {
+    return divider + '<p class="empty">這份對話沒有可顯示的訊息。</p>';
+  }
+  const parts: string[] = [];
+  let placed = !divider;
+  for (const message of messages) {
+    if (
+      !placed &&
+      message.sourceLine !== undefined &&
+      message.sourceLine >= backedUpRecords
+    ) {
+      parts.push(divider);
+      placed = true;
+    }
+    parts.push(messageHtml(message, avatar));
+  }
+  if (!placed) {
+    parts.push(divider);
+  }
+  return parts.join("\n");
 }
 
 function messageHtml(message: TranscriptMessage, avatar: string): string {
@@ -254,8 +304,15 @@ body {
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
+/*
+ * 橫桿落在對話流裡「已備份到哪裡」的位置，但捲過它之後黏在標題列底下，
+ * 才不會一往下捲就忘了自己在分界的哪一邊。--header-h 由腳本量標題列高度後寫入。
+ */
 .status-divider {
-  padding: 7px 24px 9px;
+  position: sticky;
+  top: var(--header-h, 56px);
+  z-index: 1;
+  padding: 10px 24px 12px;
   background: var(--bg);
 }
 .status-divider.tone-added { color: var(--added); }

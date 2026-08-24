@@ -234,16 +234,20 @@ export function parseClaudeTranscript(lines: any[]): ParsedTranscript {
    * 助理的連續紀錄併成一則，工具呼叫才會留在觸發它的那次回覆裡。
    * 使用者訊息不併：每一次送出都是獨立的一輪，併起來會讓中斷前後的兩句話黏成一段。
    */
-  const appendAssistant = (block: TranscriptBlock, timestamp?: string) => {
+  const appendAssistant = (
+    block: TranscriptBlock,
+    timestamp: string | undefined,
+    sourceLine: number
+  ) => {
     const last = messages[messages.length - 1];
     if (last?.role === "assistant") {
       last.blocks.push(block);
       return;
     }
-    messages.push({ role: "assistant", blocks: [block], timestamp });
+    messages.push({ role: "assistant", blocks: [block], timestamp, sourceLine });
   };
 
-  for (const o of lines) {
+  for (const [sourceLine, o] of lines.entries()) {
     if (!cwd && typeof o.cwd === "string") {
       cwd = o.cwd;
     }
@@ -256,30 +260,32 @@ export function parseClaudeTranscript(lines: any[]): ParsedTranscript {
             role: "notice",
             blocks: [{ kind: "text", text: notice }],
             timestamp: o.timestamp,
+            sourceLine,
           });
         } else {
           const { contexts, rest } = extractUserContext(t);
           // 只有 IDE 上下文、沒有真正提問的訊息不顯示。
           if (rest) {
-            messages.push(userMessage(contexts, rest, o.timestamp));
+            messages.push({ ...userMessage(contexts, rest, o.timestamp), sourceLine });
           }
         }
       }
     } else if (o.type === "assistant" && o.message && Array.isArray(o.message.content)) {
       for (const c of o.message.content) {
         if (c?.type === "text" && typeof c.text === "string" && c.text.trim()) {
-          appendAssistant({ kind: "text", text: c.text }, o.timestamp);
+          appendAssistant({ kind: "text", text: c.text }, o.timestamp, sourceLine);
         } else if (
           c?.type === "thinking" &&
           typeof c.thinking === "string" &&
           c.thinking.trim()
         ) {
           // thinking 的明文不一定會被寫進紀錄（只留加密的 signature），空的就跳過。
-          appendAssistant({ kind: "thinking", text: c.thinking }, o.timestamp);
+          appendAssistant({ kind: "thinking", text: c.thinking }, o.timestamp, sourceLine);
         } else if (c?.type === "tool_use" && c.name) {
           appendAssistant(
             { kind: "tool", name: c.name, detail: toolDetail(c.input) },
-            o.timestamp
+            o.timestamp,
+            sourceLine
           );
         }
       }

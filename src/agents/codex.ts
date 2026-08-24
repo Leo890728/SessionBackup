@@ -201,6 +201,7 @@ export async function parseCodexTranscript(
   // 先收集起來，等這一輪結束（task_complete）再決定哪些要收合。
   let pending: TranscriptBlock[] = [];
   let pendingAt: string | undefined;
+  let pendingFrom: number | undefined;
   let durationMs: number | undefined;
 
   const flushTurn = () => {
@@ -215,18 +216,21 @@ export async function parseCodexTranscript(
           ...answer,
         ],
         timestamp: pendingAt,
+        sourceLine: pendingFrom,
       });
     }
     pending = [];
     pendingAt = undefined;
+    pendingFrom = undefined;
     durationMs = undefined;
   };
-  const collect = (block: TranscriptBlock, timestamp?: string) => {
+  const collect = (block: TranscriptBlock, timestamp: string | undefined, sourceLine: number) => {
     pending.push(block);
     pendingAt = pendingAt ?? timestamp;
+    pendingFrom = pendingFrom ?? sourceLine;
   };
 
-  for (const o of lines) {
+  for (const [sourceLine, o] of lines.entries()) {
     const meta = codexSessionMeta(o);
     if (meta) {
       cwd = codexMetaCwd(meta) ?? cwd;
@@ -250,26 +254,31 @@ export async function parseCodexTranscript(
         if (rest) {
           // 沒有 task_complete 的舊紀錄：遇到下一次提問就把上一輪收掉。
           flushTurn();
-          messages.push(userMessage(contexts, rest, o.timestamp));
+          messages.push({ ...userMessage(contexts, rest, o.timestamp), sourceLine });
         }
       }
     } else if (p.type === "message" && p.role === "assistant") {
       const t = codexTexts(p.content, "output_text");
       if (t) {
-        collect({ kind: "text", text: t }, o.timestamp);
+        collect({ kind: "text", text: t }, o.timestamp, sourceLine);
       }
     } else if (p.type === "reasoning") {
       const t = codexTexts(p.summary, "summary_text");
       if (t) {
-        collect({ kind: "thinking", text: t }, o.timestamp);
+        collect({ kind: "thinking", text: t }, o.timestamp, sourceLine);
       }
     } else if (p.type === "function_call" && p.name) {
       collect(
         { kind: "tool", name: p.name, detail: toolDetail(safeJson(p.arguments)) },
-        o.timestamp
+        o.timestamp,
+        sourceLine
       );
     } else if (p.type === "local_shell_call" && p.action?.command) {
-      collect({ kind: "tool", name: "shell", detail: toolDetail(p.action.command) }, o.timestamp);
+      collect(
+        { kind: "tool", name: "shell", detail: toolDetail(p.action.command) },
+        o.timestamp,
+        sourceLine
+      );
     }
   }
   flushTurn();

@@ -109,27 +109,54 @@ describe("previewHtml", () => {
     assert.ok(html.includes('<details class="thinking"><summary>思考過程</summary>'));
   });
 
-  it("marks a newly added conversation with a green sticky divider", () => {
-    const added = previewHtml(transcript([]), "n0", {}, { status: "unbacked" });
+  it("puts the added divider above everything when nothing was backed up yet", () => {
+    const added = previewHtml(
+      transcript([
+        { role: "user", blocks: [{ kind: "text", text: "第一個提問" }], sourceLine: 0 },
+      ]),
+      "n0",
+      {},
+      { status: "unbacked" }
+    );
     assert.ok(
       added.includes(
         '<div class="status-divider tone-added" role="separator" aria-label="對話新增">'
       )
     );
-    assert.ok(added.includes("<span>對話新增</span>"));
-    assert.ok(added.includes(".sticky-header {\n  position: sticky;"));
-    assert.ok(added.indexOf('class="topbar"') < added.indexOf('class="status-divider'));
-    assert.ok(added.indexOf('class="status-divider') < added.indexOf('class="thread"'));
+    assert.ok(added.indexOf('class="status-divider') < added.indexOf("第一個提問"));
   });
 
-  it("marks a changed conversation with a yellow sticky divider", () => {
-    const modified = previewHtml(transcript([]), "n0", {}, { status: "modified" });
+  it("puts the changed divider where the backed up content ends", () => {
+    // 前兩筆紀錄已經備份過，橫桿要落在第三筆產生的那則訊息之前，不是最上面。
+    const html = previewHtml(
+      transcript([
+        { role: "user", blocks: [{ kind: "text", text: "舊提問" }], sourceLine: 0 },
+        { role: "assistant", blocks: [{ kind: "text", text: "舊回覆" }], sourceLine: 1 },
+        { role: "user", blocks: [{ kind: "text", text: "新提問" }], sourceLine: 2 },
+      ]),
+      "n0",
+      {},
+      { status: "modified", backedUpRecords: 2 }
+    );
     assert.ok(
-      modified.includes(
+      html.includes(
         '<div class="status-divider tone-modified" role="separator" aria-label="新對話">'
       )
     );
-    assert.ok(modified.includes("<span>新對話</span>"));
+    assert.ok(html.indexOf("舊回覆") < html.indexOf('class="status-divider'));
+    assert.ok(html.indexOf('class="status-divider') < html.indexOf("新提問"));
+  });
+
+  it("falls back to the end when the new records produced no visible message", () => {
+    const html = previewHtml(
+      transcript([
+        { role: "user", blocks: [{ kind: "text", text: "舊提問" }], sourceLine: 0 },
+      ]),
+      "n0",
+      {},
+      { status: "modified", backedUpRecords: 5 }
+    );
+    assert.ok(html.indexOf("舊提問") < html.indexOf('class="status-divider'));
   });
 
   it("leaves out the divider for sessions the next backup will skip", () => {

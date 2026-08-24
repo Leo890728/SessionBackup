@@ -7,7 +7,15 @@ import {
   sameConversationWorkspace,
 } from "../render/sessionConversation";
 import { Tool } from "../agents/types";
+import { readAllLines } from "../agents/sessionFile";
 import { readTranscript } from "../agents/transcript";
+import { getConfig } from "../config";
+import {
+  machineIdFromConfig,
+  manifestRelativePath,
+  readManifest,
+  revisionRelativePath,
+} from "../store/sessionStore";
 import { previewHtml } from "../render/sessionPreviewHtml";
 import type { SessionSyncStatus } from "../store/sessionStatus";
 
@@ -51,7 +59,10 @@ export async function showSessionPreview(
       await readTranscript(tool, file),
       newNonce(),
       assets(existing.panel.webview),
-      { status: existing.status },
+      {
+        status: existing.status,
+        backedUpRecords: await backedUpRecords(tool, file),
+      },
     );
     return;
   }
@@ -77,7 +88,10 @@ export async function showSessionPreview(
         await readTranscript(tool, file),
         newNonce(),
         assets(panel.webview),
-        { status: state.status },
+        {
+          status: state.status,
+          backedUpRecords: await backedUpRecords(tool, file),
+        },
       );
     } else if (
       message?.command === "open" &&
@@ -99,8 +113,58 @@ export async function showSessionPreview(
     assets(panel.webview),
     {
       status: state.status,
+      backedUpRecords: await backedUpRecords(tool, file),
     },
   );
+}
+
+/**
+ * 這個檔案已經備份到第幾筆紀錄——也就是預覽裡「新內容從這裡開始」的位置。
+ *
+ * 拿 manifest 指到的那份 revision 與現況比共同前綴，而不是直接用它的長度：
+ * 兩邊分叉時（本機與遠端各接了一段）分叉點才是真正該畫線的地方。
+ * 序號以 readAllLines 的陣列為準，與訊息上的 sourceLine 同一套基準。
+ */
+async function backedUpRecords(tool: Tool, file: string): Promise<number> {
+  try {
+    const cfg = getConfig();
+    const manifest = await readManifest(
+      path.join(
+        cfg.repoPath,
+        ...manifestRelativePath(machineIdFromConfig(cfg)).split("/"),
+      ),
+    );
+    // manifest 以 relativePath 為 key，但同一個 thread 可能有多個檔案，
+    // 所以比對檔名（session id / rollout 檔名）而不是 id。
+    const entry = manifest?.sessions.find(
+      (session) =>
+        session.tool === tool &&
+        path.basename(session.relativePath) === path.basename(file),
+    );
+    if (!entry) {
+      return 0;
+    }
+    const revision = path.join(
+      cfg.repoPath,
+      ...revisionRelativePath(tool, entry.id, entry.hash).split("/"),
+    );
+    const [stored, current] = await Promise.all([
+      readAllLines(revision),
+      readAllLines(file),
+    ]);
+    let common = 0;
+    while (
+      common < stored.length &&
+      common < current.length &&
+      JSON.stringify(stored[common]) === JSON.stringify(current[common])
+    ) {
+      common++;
+    }
+    return common;
+  } catch {
+    // 備份庫讀不到就當作整份都是新的：橫桿回到最上面，不會擋住預覽。
+    return 0;
+  }
 }
 
 /**
