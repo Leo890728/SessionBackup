@@ -1,7 +1,7 @@
 import * as path from "path";
 import { escapeHtml } from "./htmlEscape";
 import { renderMarkdown } from "./markdownHtml";
-import { Transcript, TranscriptBlock, TranscriptMessage } from "../agents/sessions";
+import { Transcript, TranscriptBlock, TranscriptMessage } from "../agents/types";
 import type { SessionSyncStatus } from "../store/sessionStatus";
 
 /**

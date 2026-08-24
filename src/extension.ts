@@ -24,7 +24,7 @@ import { ProjectMappingRegistry } from "./store/projectMapping";
 import { RepositoryTreeProvider } from "./ui/repositoryTree";
 import { describeSelectionKey } from "./store/selection";
 import { initialSelectionKeys } from "./store/selectionMigration";
-import { renderSessionMarkdown } from "./agents/sessions";
+import { renderSessionMarkdown } from "./agents/transcript";
 import {
   conversationOpenTarget,
   takeClaudeConversationHandoff,

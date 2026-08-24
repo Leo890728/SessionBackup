@@ -1,4 +1,4 @@
-import type { Tool } from "../agents/sessions";
+import type { Tool } from "../agents/types";
 
 /**
  * 備份選取是「白名單」：沒有任何規則涵蓋的 session 不會被備份。

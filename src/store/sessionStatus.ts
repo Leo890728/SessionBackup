@@ -1,6 +1,6 @@
 import { SelectionSet } from "./selection";
 import { hashFileCached, MachineManifest, ManifestSession } from "./sessionStore";
-import { Tool } from "../agents/sessions";
+import { Tool } from "../agents/types";
 
 export type SessionSyncStatus =
   | "synced"

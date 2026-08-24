@@ -1,6 +1,7 @@
 import * as path from "path";
 import { scanFiles, SecretFinding } from "./secretScan";
-import { codexSessionInfo, readClaudeMetadata } from "../agents/sessions";
+import { readClaudeMetadata } from "../agents/claude";
+import { codexSessionInfo } from "../agents/codex";
 import { LocalSession } from "../store/sessionStore";
 
 export interface SessionSecretMatch {

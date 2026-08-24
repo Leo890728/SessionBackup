@@ -6,7 +6,8 @@ import {
   queueClaudeConversationHandoff,
   sameConversationWorkspace,
 } from "../render/sessionConversation";
-import { readTranscript, Tool } from "../agents/sessions";
+import { Tool } from "../agents/types";
+import { readTranscript } from "../agents/transcript";
 import { previewHtml } from "../render/sessionPreviewHtml";
 import type { SessionSyncStatus } from "../store/sessionStatus";
 

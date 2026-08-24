@@ -12,18 +12,11 @@ import {
   SelectionTarget,
   sessionKey,
 } from "../store/selection";
-import {
-  ClaudeProject,
-  clearSessionCache,
-  codexSessionInfo,
-  groupSessionProjects,
-  groupCodexThreads,
-  listClaudeProjects,
-  listClaudeSessions,
-  listCodexFiles,
-  sessionProjectIdentity,
-  SessionInfo,
-} from "../agents/sessions";
+import { ClaudeProject, SessionInfo } from "../agents/types";
+import { clearSessionCache } from "../agents/sessionFile";
+import { groupSessionProjects, sessionProjectIdentity } from "../agents/grouping";
+import { listClaudeProjects, listClaudeSessions } from "../agents/claude";
+import { codexSessionInfo, groupCodexThreads, listCodexFiles } from "../agents/codex";
 import {
   buildStatusLookup,
   resolveSessionStatus,

@@ -13,7 +13,7 @@ import {
 } from "../agents/codexMeta";
 import { BackupConfig, SourceConfig } from "../config";
 import { SelectionSet } from "./selection";
-import { Tool } from "../agents/sessions";
+import { Tool } from "../agents/types";
 
 export const STORE_FORMAT_VERSION = 2;
 

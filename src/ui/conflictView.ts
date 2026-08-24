@@ -2,7 +2,8 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { escapeHtml } from "../render/htmlEscape";
-import { renderSessionMarkdown, Tool } from "../agents/sessions";
+import { Tool } from "../agents/types";
+import { renderSessionMarkdown } from "../agents/transcript";
 
 export type ConflictChoice = "A" | "B" | "skip";
 
