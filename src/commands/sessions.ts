@@ -6,7 +6,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { renderSessionMarkdown } from "../agents/transcript";
 import { showSessionPreview } from "../ui/sessionPreview";
-import { TreeNode } from "../ui/sessionTree";
+import { TreeNode } from "../ui/treeNodes";
 import { CommandDeps } from "./deps";
 
 export function registerSessionsCommands(deps: CommandDeps): vscode.Disposable[] {

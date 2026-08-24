@@ -1,6 +1,6 @@
 import * as assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { TreeNode } from "./sessionTree";
+import type { TreeNode } from "./treeNodes";
 import { nodeLabel } from "./nodeLabel";
 
 /**

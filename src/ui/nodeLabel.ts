@@ -2,7 +2,7 @@
  * 樹節點在訊息中的稱呼。TreeNode 只以型別匯入，這個模組執行時不相依 vscode。
  */
 
-import type { TreeNode } from "./sessionTree";
+import type { TreeNode } from "./treeNodes";
 
 export function nodeLabel(node: TreeNode): string {
   switch (node.kind) {

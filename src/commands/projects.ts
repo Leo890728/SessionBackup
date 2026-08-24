@@ -1,7 +1,7 @@
 /** Claude 專案與本機資料夾的對應。 */
 
 import * as vscode from "vscode";
-import { TreeNode } from "../ui/sessionTree";
+import { TreeNode } from "../ui/treeNodes";
 import { CommandDeps } from "./deps";
 
 export function registerProjectsCommands(deps: CommandDeps): vscode.Disposable[] {

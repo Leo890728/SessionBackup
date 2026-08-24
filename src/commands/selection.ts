@@ -4,7 +4,7 @@ import * as vscode from "vscode";
 import { getConfig, updateSelectedSessions } from "../config";
 import { describeSelectionKey } from "../store/selection";
 import { nodeLabel } from "../ui/nodeLabel";
-import { TreeNode } from "../ui/sessionTree";
+import { TreeNode } from "../ui/treeNodes";
 import { CommandDeps } from "./deps";
 
 export function registerSelectionCommands(deps: CommandDeps): vscode.Disposable[] {

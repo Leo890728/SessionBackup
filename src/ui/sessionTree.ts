@@ -3,16 +3,8 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { getConfig, updateSelectedSessions } from "../config";
-import {
-  applyRule,
-  applyProjectGroupRules,
-  partialHint,
-  SelectionLevel,
-  SelectionSet,
-  SelectionTarget,
-  sessionKey,
-} from "../store/selection";
-import { ClaudeProject, SessionInfo } from "../agents/types";
+import { applyRule, partialHint, SelectionSet } from "../store/selection";
+import { SessionInfo } from "../agents/types";
 import { clearSessionCache } from "../agents/sessionFile";
 import { groupSessionProjects, sessionProjectIdentity } from "../agents/grouping";
 import { listClaudeProjects, listClaudeSessions } from "../agents/claude";
@@ -20,7 +12,6 @@ import { codexSessionInfo, groupCodexThreads, listCodexFiles } from "../agents/c
 import {
   buildStatusLookup,
   resolveSessionStatus,
-  SessionSyncStatus,
   STATUS_DISPLAY,
   StatusLookup,
 } from "../store/sessionStatus";
@@ -28,7 +19,6 @@ import { ProjectMappingRegistry } from "../store/projectMapping";
 import {
   machineIdFromConfig,
   manifestRelativePath,
-  ProjectRef,
   readManifest,
   readMachineManifests,
 } from "../store/sessionStore";
@@ -37,53 +27,23 @@ import {
   filterUnmapped,
   RemoteProject,
 } from "../store/unmappedProjects";
-
-type ClaudeProjectNode = {
-  kind: "claudeProject";
-  projectKey: string;
-  projectLabel: string;
-  cwd?: string;
-  projects: ClaudeProject[];
-};
-
-type CodexProjectNode = {
-  kind: "codexProject";
-  projectKey: string;
-  projectLabel: string;
-  cwd?: string;
-  codexRoot: string;
-  topLevel: SessionInfo[];
-  subsByHost: Map<string, SessionInfo[]>;
-};
-
-type ProjectNode = {
-  kind: "project";
-  key: string;
-  label: string;
-  cwd?: string;
-  latestMtime: number;
-  children: (ClaudeProjectNode | CodexProjectNode)[];
-};
-
-export type TreeNode =
-  | ProjectNode
-  | ClaudeProjectNode
-  | CodexProjectNode
-  | {
-      kind: "session";
-      info: SessionInfo;
-      status: SessionSyncStatus;
-      claudeProjectDir?: string;
-      conversationCwd?: string;
-      subs?: TreeNode[];
-    }
-  /** 遠端備份過、本機還沒有對應資料夾的 Claude 專案；點一下建立映射。 */
-  | {
-      kind: "unmappedProject";
-      project: ProjectRef;
-      count: number;
-      machines: string[];
-    };
+import {
+  ClaudeProjectNode,
+  CodexProjectNode,
+  ProjectNode,
+  TreeNode,
+} from "./treeNodes";
+import {
+  applyAiSelection,
+  codexTarget,
+  collectCodexInfos,
+  flattenSessions,
+  groupDescription,
+  PARTIAL_TIP,
+  projectSelectionTip,
+  ruleFor,
+  selectionSummary,
+} from "./treeSelection";
 
 export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private _onDidChangeTreeData = new vscode.EventEmitter<
@@ -537,159 +497,6 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     return node.topLevel.map((info) => toNode(info, new Set()));
   }
 }
-
-/** 單一 session 節點對應的選取規則。 */
-export function ruleFor(node: Extract<TreeNode, { kind: "session" }>): {
-  key: string;
-  target: SelectionTarget;
-  level: SelectionLevel;
-} {
-  return {
-    key: sessionKey(node.info.tool, node.info.backupId),
-    target: {
-      tool: node.info.tool,
-      id: node.info.backupId,
-      claudeProjectDir: node.claudeProjectDir,
-    },
-    level: "session",
-  };
-}
-
-function codexTarget(info: SessionInfo): SelectionTarget {
-  return { tool: info.tool, id: info.backupId };
-}
-
-function collectCodexInfos(
-  topLevel: readonly SessionInfo[],
-  subsByHost: ReadonlyMap<string, SessionInfo[]>,
-): SessionInfo[] {
-  const out: SessionInfo[] = [];
-  const seen = new Set<string>();
-  const visit = (info: SessionInfo) => {
-    if (seen.has(info.file)) {
-      return;
-    }
-    seen.add(info.file);
-    out.push(info);
-    for (const sub of subsByHost.get(info.file) ?? []) {
-      visit(sub);
-    }
-  };
-  for (const info of topLevel) {
-    visit(info);
-  }
-  return out;
-}
-
-function selectionSummary(
-  selection: SelectionSet,
-  node: ClaudeProjectNode | CodexProjectNode,
-): { total: number; chosen: number; selected: boolean } {
-  if (node.kind === "claudeProject") {
-    let total = 0;
-    let chosen = 0;
-    for (const project of node.projects) {
-      const projectDir = path.basename(project.dir);
-      total += project.sessionIds.length;
-      chosen += project.sessionIds.filter((id) =>
-        selection.includes({
-          tool: "claude",
-          id,
-          claudeProjectDir: projectDir,
-        }),
-      ).length;
-    }
-    return {
-      total,
-      chosen,
-      selected:
-        node.projects.length > 0 &&
-        node.projects.every((project) =>
-          selection.claudeProjectSelected(path.basename(project.dir)),
-        ),
-    };
-  }
-
-  const infos = collectCodexInfos(node.topLevel, node.subsByHost);
-  const chosen = infos.filter((info) =>
-    selection.includes(codexTarget(info)),
-  ).length;
-  return {
-    total: infos.length,
-    chosen,
-    selected: infos.length > 0 && chosen === infos.length,
-  };
-}
-
-function groupDescription(
-  total: number,
-  chosen: number,
-  selected: boolean,
-  partial: string | undefined,
-): string {
-  const count = `${total} 個對話`;
-  if (partial) {
-    return `${count} · ${partial}`;
-  }
-  if (selected) {
-    return `${count} · 已選取`;
-  }
-  return total > 0 && chosen === total ? `${count} · 目前全選` : count;
-}
-
-function projectSelectionTip(
-  children: readonly (ClaudeProjectNode | CodexProjectNode)[],
-): string {
-  const hasClaude = children.some((child) => child.kind === "claudeProject");
-  const hasCodex = children.some((child) => child.kind === "codexProject");
-  if (hasClaude && hasCodex) {
-    return (
-      "勾選會套用底下兩個 AI：Claude Code 包含之後新增的對話；" +
-      "Codex 只包含目前已有的對話。"
-    );
-  }
-  return hasClaude
-    ? "勾選以備份這個專案的所有 Claude Code 對話（含之後新增的）"
-    : "勾選以備份這個專案目前已有的 Codex 對話（不含之後新增的）";
-}
-
-function applyAiSelection(
-  current: readonly string[],
-  node: ClaudeProjectNode | CodexProjectNode,
-  selected: boolean,
-): string[] {
-  if (node.kind === "claudeProject") {
-    return applyProjectGroupRules(
-      current,
-      node.projects.map((project) => path.basename(project.dir)),
-      [],
-      selected,
-    );
-  }
-
-  return applyProjectGroupRules(
-    current,
-    [],
-    collectCodexInfos(node.topLevel, node.subsByHost).map(codexTarget),
-    selected,
-  );
-}
-
-function flattenSessions(nodes: TreeNode[]): SessionInfo[] {
-  const out: SessionInfo[] = [];
-  for (const node of nodes) {
-    if (node.kind !== "session") {
-      continue;
-    }
-    out.push(node.info);
-    if (node.subs?.length) {
-      out.push(...flattenSessions(node.subs));
-    }
-  }
-  return out;
-}
-
-const PARTIAL_TIP = "部分選取：底下的對話只勾了一部分。\n\n";
 
 function checkbox(selected: boolean): vscode.TreeItemCheckboxState {
   return selected

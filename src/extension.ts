@@ -47,7 +47,8 @@ import {
   revisionRelativePath,
   setAutoMachineId,
 } from "./store/sessionStore";
-import { SessionTreeProvider, TreeNode } from "./ui/sessionTree";
+import { SessionTreeProvider } from "./ui/sessionTree";
+import { TreeNode } from "./ui/treeNodes";
 import { rememberKeepLocal, runSync } from "./ops/sync";
 
 let timer: NodeJS.Timeout | undefined;
