@@ -6,32 +6,64 @@ import type { ProjectRef } from "./sessionStore";
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * 專案身分：先看 origin remote，沒有 remote 才退到 root commit。
+ *
+ * 兩者都與磁碟路徑無關，換一台電腦仍算同一個專案——這正是 fallbackProject
+ * 的路徑雜湊做不到的事。remote 排第一是因為它分得開「同一個上游的兩個 fork」；
+ * 但還沒 push、或只是把資料夾複製過去的 repo 沒有 remote，那時 root commit
+ * 是唯一跨機認得出來的東西。
+ */
 export async function detectProject(localPath: string): Promise<ProjectRef | undefined> {
   const resolved = path.resolve(localPath);
-  try {
-    const rootResult = await execFileAsync(
-      "git",
-      ["-C", resolved, "rev-parse", "--show-toplevel"],
-      { windowsHide: true }
-    );
-    const gitRoot = path.resolve(rootResult.stdout.trim());
-    const remoteResult = await execFileAsync(
-      "git",
-      ["-C", gitRoot, "config", "--get", "remote.origin.url"],
-      { windowsHide: true }
-    );
-    const remote = normalizeGitRemote(remoteResult.stdout.trim());
-    if (!remote) {
-      return undefined;
-    }
+  const toplevel = await git(resolved, ["rev-parse", "--show-toplevel"]);
+  if (!toplevel) {
+    return undefined;
+  }
+  const gitRoot = path.resolve(toplevel);
+  const workspaceRelativePath = path.relative(gitRoot, resolved).replace(/\\/g, "/") || ".";
+  const displayName = path.basename(resolved);
+
+  const remote = normalizeGitRemote(
+    (await git(gitRoot, ["config", "--get", "remote.origin.url"])) ?? ""
+  );
+  if (remote) {
     const gitRemoteHash = digest(remote);
-    const workspaceRelativePath = path.relative(gitRoot, resolved).replace(/\\/g, "/") || ".";
     return {
       id: `git-${digest(`${gitRemoteHash}\n${workspaceRelativePath}`).slice(0, 32)}`,
-      displayName: path.basename(resolved),
+      displayName,
       gitRemoteHash,
       workspaceRelativePath,
     };
+  }
+
+  // 歷史被合併過的 repo 會有多個 root commit：排序後全取，兩台電腦才不會因為
+  // rev-list 的走訪順序不同而算出不同的身分。還沒有任何 commit 就沒有身分可用。
+  const roots = (await git(gitRoot, ["rev-list", "--max-parents=0", "HEAD"]))
+    ?.split(/\s+/)
+    .filter(Boolean)
+    .sort();
+  if (!roots?.length) {
+    return undefined;
+  }
+  return {
+    id: `root-${digest(`${roots.join(",")}\n${workspaceRelativePath}`).slice(0, 32)}`,
+    displayName,
+    workspaceRelativePath,
+  };
+}
+
+/** 專案身分是不是靠 git 認出來的；path 雜湊換一台電腦必然對不上，值得再試一次偵測。 */
+export function isGitIdentity(id: string): boolean {
+  return id.startsWith("git-") || id.startsWith("root-");
+}
+
+async function git(cwd: string, args: string[]): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
+      windowsHide: true,
+    });
+    return stdout.trim() || undefined;
   } catch {
     return undefined;
   }

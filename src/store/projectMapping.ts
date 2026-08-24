@@ -5,6 +5,7 @@ import {
   detectProject,
   encodeClaudeProjectDir,
   fallbackProject,
+  isGitIdentity,
 } from "./projectIdentity";
 import type { ProjectRef } from "./sessionStore";
 
@@ -22,6 +23,11 @@ interface MappingData {
 export class ProjectMappingRegistry {
   private readonly file: string;
   private data: MappingData | undefined;
+  /**
+   * 這次執行已經試過升級的路徑。身分是逐 session 查的，沒有這層擋著，
+   * 每個還沒有 git 身分的專案都會在每次備份多開幾十次 git 子程序。
+   */
+  private readonly upgradeTried = new Set<string>();
 
   constructor(globalStoragePath: string) {
     this.file = path.join(globalStoragePath, "project-mappings.json");
@@ -44,6 +50,7 @@ export class ProjectMappingRegistry {
   /** 檔案被外部刪除（除錯命令清資料）後丟掉記憶體快取，否則下次寫入會把舊資料寫回去。 */
   reset(): void {
     this.data = undefined;
+    this.upgradeTried.clear();
   }
 
   async identifyLocalProject(
@@ -55,7 +62,7 @@ export class ProjectMappingRegistry {
       (mapping) => mapping.claudeProjectDir.toLowerCase() === claudeProjectDir.toLowerCase()
     );
     if (byBucket) {
-      return publicRef(byBucket);
+      return (await this.upgradeIdentity(byBucket)) ?? publicRef(byBucket);
     }
     const candidatePath = cwd && path.isAbsolute(cwd) ? path.resolve(cwd) : undefined;
     if (!candidatePath) {
@@ -81,7 +88,7 @@ export class ProjectMappingRegistry {
       (mapping) => path.resolve(mapping.localPath).toLowerCase() === resolved.toLowerCase()
     );
     if (byPath) {
-      return publicRef(byPath);
+      return (await this.upgradeIdentity(byPath)) ?? publicRef(byPath);
     }
     if (!fs.existsSync(resolved)) {
       return undefined;
@@ -90,6 +97,32 @@ export class ProjectMappingRegistry {
     const project = detected ?? fallbackProject(resolved);
     await this.remember(project, resolved, encodeClaudeProjectDir(resolved));
     return project;
+  }
+
+  /**
+   * 已記住的專案若還是路徑雜湊身分，再偵測一次 git。
+   *
+   * 身分是第一次見到專案時定下來的，之後每次備份都直接沿用；所以「當時還沒 git init
+   * 或還沒加 remote」的專案會永遠停在只有這台電腦認得的 local- 身分，換一台電腦
+   * 必然對不上，只能手動對應。資料夾還在就重試，成功即改寫成 git 身分。
+   */
+  private async upgradeIdentity(
+    mapping: LocalProjectMapping
+  ): Promise<ProjectRef | undefined> {
+    const key = path.resolve(mapping.localPath).toLowerCase();
+    if (isGitIdentity(mapping.id) || this.upgradeTried.has(key)) {
+      return undefined;
+    }
+    this.upgradeTried.add(key);
+    if (!fs.existsSync(mapping.localPath)) {
+      return undefined;
+    }
+    const detected = await detectProject(mapping.localPath);
+    if (!detected) {
+      return undefined;
+    }
+    await this.remember(detected, mapping.localPath, mapping.claudeProjectDir);
+    return detected;
   }
 
   /**
