@@ -4,11 +4,8 @@ import * as vscode from "vscode";
 import { ConflictRecord, ConflictRegistry } from "../store/conflicts";
 import { getConfig } from "../config";
 import { Git } from "../git/git";
-import {
-  findBackupRepositories,
-  getSessionToken,
-  tokenHeader,
-} from "../git/github";
+import { findBackupRepositories } from "../git/github/api";
+import { getSessionToken, tokenHeader } from "../git/github/auth";
 import { selectAutomaticBackupRepo } from "../git/githubState";
 import { ProjectMappingRegistry } from "../store/projectMapping";
 import {

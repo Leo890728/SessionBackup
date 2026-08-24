@@ -13,7 +13,8 @@ import {
   updateSelectedSessions,
 } from "./config";
 import { registerDebugCommands } from "./ui/debug";
-import { getSessionToken, setupRemote } from "./git/github";
+import { getSessionToken } from "./git/github/auth";
+import { setupRemote } from "./git/setupRemote";
 import { Git } from "./git/git";
 import {
   applyMachineIdentity,

@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { getConfig, updateSelectedSessions } from "../config";
 import { Git } from "../git/git";
-import { getSessionToken, tokenHeader } from "../git/github";
+import { getSessionToken, tokenHeader } from "../git/github/auth";
 import { ProjectMappingRegistry } from "../store/projectMapping";
 import { applySessionRules } from "../store/selection";
 import { scanSessionsForSecrets, sessionDisplayName } from "../security/sessionSecretScan";
