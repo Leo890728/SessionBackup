@@ -1,6 +1,6 @@
 # AI Session Backup
 
-![version](https://img.shields.io/badge/version-0.5.2-blue)
+![version](https://img.shields.io/badge/version-1.0.0-blue)
 ![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.85.0-007ACC?logo=visualstudiocode&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.4-3178C6?logo=typescript&logoColor=white)
 ![license](https://img.shields.io/badge/license-MIT-green)
@@ -248,14 +248,19 @@ B 電腦在 `D:\` 時，這個欄位視為**機器本地屬性**處理：
 - Codex 子代理 thread（session_meta 含 `parent_thread_id`，如 guardian）不會當獨立
   session 顯示，而是掛在父 thread 最新 rollout 檔的節點下展開；父檔案已被 Codex 清除的
   子 thread 不顯示（仍會照常備份）。
+- 本機解不出位置的專案收在最上面的 **未對應專案** 那一層（預設收合），不與已對應的
+  專案混在一起：包含其他電腦備份過但本機還沒有檔案的 Claude 專案，以及本機有檔案、
+  但工作目錄是別台電腦路徑的對話。
 - 專案、AI 與對話節點左側都有核取方塊，用來決定備份哪些對話。
-- 每個 session 顯示備份狀態（比對本機 manifest，不需連網）：
-  - ✓ **已同步** — 目前內容已在備份中
-  - ☁ **未同步** — 備份後有新內容，下次備份會更新
-  - ○ **待備份** — 已勾選但尚未備份過（包含之前因金鑰跳過的）
-  - ⃠ **未選取** — 沒有勾選，備份與同步都會跳過
-  - ⚠ **跳過（過大）** — 超過 `maxFileSizeMB` 上限
+- 備份狀態比照檔案總管的 git 裝飾，以列尾字母表示（比對本機 manifest，不需連網）：
+  - **U**（綠）**待備份** — 已勾選但備份庫裡還沒有
+  - **M**（黃）**未同步** — 備份後有新內容，下次備份會更新
+  - **!**（紅）**跳過（過大）** — 超過 `maxFileSizeMB` 上限
+  - **整列變暗** — 未選取，備份與同步都會跳過；整個專案／AI 都沒勾選時該層也會變暗
+  - 已同步不顯示任何標記
 - 點擊 session 可預覽 Markdown；可從預覽頁直接回到 Claude Code 或 Codex 的原生對話視窗。
+- 預覽開啟時停在最新訊息；下次備份會寫入的對話會有一條橫桿標出「已備份到哪裡」，
+  位置取自已備份 revision 與現況的共同前綴，捲過之後會黏在標題列下方。
 - 右鍵可匯出 Markdown、開啟原始 JSONL、加入或移出備份。
 
 側邊欄頂端的 **GitHub Backup** 會依狀態顯示操作：
@@ -265,7 +270,7 @@ B 電腦在 `D:\` 時，這個欄位視為**機器本地屬性**處理：
   建立第一個 commit 並 push。
 - 已有備份：顯示 `owner/repo` 與最近備份時間；點擊可立即再次備份。
 - 偵測到本機變更時，狀態磚下方會展開「**有變動的 sessions**」清單（類似 Source Control
-  的 Changes）：標示 **新增** 或 **已變更**、顯示可讀標題，點擊可預覽對話；
+  的 Changes）：以 **U**／**M** 標示新增或已變更、顯示可讀標題，點擊可預覽對話；
   最多列 30 筆，其餘以「…還有 N 個」摘要。
 
 ### 安全機制
