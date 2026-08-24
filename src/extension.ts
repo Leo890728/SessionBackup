@@ -14,6 +14,8 @@ import {
 } from "./config";
 import { registerDebugCommands } from "./ui/debug";
 import { getSessionToken } from "./git/github/auth";
+import { configReaction } from "./configChange";
+import { nodeLabel } from "./ui/nodeLabel";
 import { setupRemote } from "./git/setupRemote";
 import { Git } from "./git/git";
 import {
@@ -43,17 +45,6 @@ import { rememberKeepLocal, runSync } from "./ops/sync";
 
 let timer: NodeJS.Timeout | undefined;
 let statusItem: vscode.StatusBarItem;
-
-/**
- * 只有這些設定會換掉監看目標或遠端，需要重建 watcher 並重新 fetch。
- * 選取規則不在其中——它只縮放本機掃描範圍，走輕量的 refresh 就好。
- */
-const RECONFIGURE_KEYS = [
-  "sessionBackup.sources",
-  "sessionBackup.repoPath",
-  "sessionBackup.repoName",
-  "sessionBackup.machineId",
-];
 
 export function activate(context: vscode.ExtensionContext): void {
   const out = vscode.window.createOutputChannel("Session Backup");
@@ -382,17 +373,18 @@ export function activate(context: vscode.ExtensionContext): void {
       tree.refresh();
     }),
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration("sessionBackup.selectedSessions")) {
+      const reaction = configReaction((key) => e.affectsConfiguration(key));
+      if (reaction.reloadSelection) {
         tree.reloadSelection();
         // 這裡是唯一保證 getConfiguration() 讀得到新選取的時機：await update() 回來
         // 之後設定模型不一定已經發布，搶先掃描會算出舊的「有變動的 sessions」。
         // 所以勾選造成的重掃一律由這個事件驅動，呼叫端不要自己 refresh。
         repository.refresh(false);
       }
-      if (RECONFIGURE_KEYS.some((key) => e.affectsConfiguration(key))) {
+      if (reaction.reconfigure) {
         repository.reconfigure();
       }
-      if (e.affectsConfiguration("sessionBackup")) {
+      if (reaction.restartTimer) {
         restartTimer(context, out, projects, repository, tree, conflicts);
       }
     }),
@@ -610,21 +602,6 @@ async function notifySelectionChange(migrated: number): Promise<void> {
   const pick = await vscode.window.showInformationMessage(message, open);
   if (pick === open) {
     await vscode.commands.executeCommand("sessionBackup.sessions.focus");
-  }
-}
-
-function nodeLabel(node: TreeNode): string {
-  switch (node.kind) {
-    case "project":
-      return `專案「${node.label}」`;
-    case "claudeProject":
-      return `專案「${node.projectLabel}」的 Claude Code`;
-    case "codexProject":
-      return `專案「${node.projectLabel}」的 Codex`;
-    case "session":
-      return `「${node.info.title}」`;
-    case "unmappedProject":
-      return `待對應專案「${node.project.displayName}」`;
   }
 }
 
