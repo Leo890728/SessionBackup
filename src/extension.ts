@@ -66,12 +66,17 @@ export function activate(context: vscode.ExtensionContext): void {
   const tree = new SessionTreeProvider(context.extensionUri, projects);
   // 先搬設定鍵再跑選擇制遷移：順序反過來的話，migrateToSelection 會看到空的
   // trackedSessions，把使用者既有的規則當成「還沒遷移」重算一次。
-  void migrateTrackedSessionsKey(out, tree).then(() =>
+  void migrateTrackedSessionsKey(context, out, tree).then(() =>
     migrateToSelection(context, out, tree),
   );
   const conflicts = new ConflictRegistry(context.globalStorageUri.fsPath);
-  const repository = new RepositoryTreeProvider(out, projects, conflicts, () =>
-    tree.refresh(),
+  const repository = new RepositoryTreeProvider(
+    context.extensionUri,
+    context.globalState,
+    out,
+    projects,
+    conflicts,
+    () => tree.refresh(),
   );
 
   statusItem = vscode.window.createStatusBarItem(
@@ -154,6 +159,13 @@ export function activate(context: vscode.ExtensionContext): void {
     // 重掃由 onDidChangeConfiguration 驅動（見上），這裡只負責寫入選取規則。
     sessionsView.onDidChangeCheckboxState((e) => {
       void tree.handleCheckboxChange(e.items);
+    }),
+    // 未追蹤的專案用自帶的 SVG，開合那兩張要自己換（見 setProjectExpanded）。
+    sessionsView.onDidExpandElement((e) => {
+      tree.setProjectExpanded(e.element, true);
+    }),
+    sessionsView.onDidCollapseElement((e) => {
+      tree.setProjectExpanded(e.element, false);
     }),
     vscode.window.registerTreeDataProvider(
       "sessionBackup.repository",
@@ -245,23 +257,31 @@ async function migrateMachineIdentity(
 /**
  * 設定鍵 sessionBackup.selectedSessions 改名為 trackedSessions（介面統一用「追蹤」）。
  * 不搬的話舊使用者的白名單會突然變成空的，所有對話一起停止備份而且不會有任何提示。
+ *
+ * 一台機器只搬一次。沒有這個旗標的話，只要舊鍵又出現（同時開著舊版的視窗、
+ * Settings Sync 把舊值同步回來）就會再搬一次，而搬移是 [...current, ...legacy] 合併，
+ * 等於把使用者後來取消追蹤的規則無聲還原回去。
  */
 async function migrateTrackedSessionsKey(
+  context: vscode.ExtensionContext,
   out: vscode.OutputChannel,
   tree: SessionTreeProvider,
 ): Promise<void> {
-  const legacy = readLegacySelectedSessions();
-  if (!legacy.length) {
+  if (context.globalState.get<boolean>("trackedSessionsKeyMigrated")) {
     return;
   }
+  const legacy = readLegacySelectedSessions();
   try {
-    // 合併而不是覆蓋：兩個鍵同時有值時（手動改過設定）不該把新鍵的規則丟掉。
-    await updateTrackedSessions((current) => [...current, ...legacy]);
-    await clearLegacySelectedSessions();
-    tree.reloadSelection();
-    out.appendLine(
-      `已將 ${legacy.length} 條 sessionBackup.selectedSessions 規則搬到 sessionBackup.trackedSessions`,
-    );
+    if (legacy.length) {
+      // 合併而不是覆蓋：兩個鍵同時有值時（手動改過設定）不該把新鍵的規則丟掉。
+      await updateTrackedSessions((current) => [...current, ...legacy]);
+      await clearLegacySelectedSessions();
+      tree.reloadSelection();
+      out.appendLine(
+        `已將 ${legacy.length} 條 sessionBackup.selectedSessions 規則搬到 sessionBackup.trackedSessions`,
+      );
+    }
+    await context.globalState.update("trackedSessionsKeyMigrated", true);
   } catch (e: any) {
     out.appendLine("追蹤設定搬移失敗：" + e.message);
   }

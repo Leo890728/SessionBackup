@@ -32,6 +32,18 @@ import {
   readManifest,
 } from "../store/sessionStore";
 
+/** 變更清單裡的一份 session。指令會直接收到它，所以型別要對外公開。 */
+export interface ChangedSessionNode {
+  kind: "changedSession";
+  displayName: string;
+  change: SessionChangeKind;
+  session: LocalSession;
+  /** 掛在這個檔案底下的 Codex 子代理檔 */
+  children: RepositoryNode[];
+  /** 含自己與所有子代理的檔案數；1 表示不需要顯示成一個 thread */
+  total: number;
+}
+
 type RepositoryNode =
   | { kind: "checking" }
   | { kind: "connect" }
@@ -50,17 +62,15 @@ type RepositoryNode =
     }
   | { kind: "changes"; count: number; files: number }
   | {
-      kind: "changedSession";
+      kind: "changedProject";
       displayName: string;
-      change: SessionChangeKind;
-      session: LocalSession;
-      /** 掛在這個檔案底下的 Codex 子代理檔 */
       children: RepositoryNode[];
-      /** 含自己與所有子代理的檔案數；1 表示不需要顯示成一個 thread */
-      total: number;
     }
+  | ChangedSessionNode
   | {
       kind: "changedThread";
+      tool: LocalSession["tool"];
+      project?: LocalSession["project"];
       displayName: string;
       total: number;
       children: RepositoryNode[];
@@ -72,6 +82,10 @@ type RepositoryNode =
 const LOCAL_SCAN_DELAY_MS = 1200;
 const REMOTE_SCAN_INTERVAL_MS = 60_000;
 const MAX_CHANGED_SHOWN = 30;
+const REPOSITORY_VIEW_MODE_KEY = "repositoryViewMode";
+const REPOSITORY_TREE_CONTEXT = "sessionBackup.repositoryTreeView";
+
+export type RepositoryViewMode = "list" | "tree";
 
 export class RepositoryTreeProvider
   implements vscode.TreeDataProvider<RepositoryNode>, vscode.Disposable
@@ -88,6 +102,8 @@ export class RepositoryTreeProvider
   private node: RepositoryNode = { kind: "checking" };
   /** 變動清單的頂層列（每個 thread 一列，單檔 session 就是它自己）。 */
   private changed: RepositoryNode[] = [];
+  /** 樹狀顯示時使用的專案父節點。 */
+  private changedProjects: RepositoryNode[] = [];
   /** 變動檔案總數（不是列數）。 */
   private changedTotal = 0;
   /** 已經建成節點的檔案數，用來算 overflow。 */
@@ -100,13 +116,25 @@ export class RepositoryTreeProvider
   private requestRemoteCheck = false;
   /** 這次掃描動過本地備份庫，掃完要通知外面。 */
   private localRepoTouched = false;
+  private viewMode: RepositoryViewMode;
 
   constructor(
+    private readonly extensionUri: vscode.Uri,
+    private readonly state: vscode.Memento,
     private readonly out: vscode.OutputChannel,
     private readonly projects: ProjectMappingRegistry,
     private readonly conflicts: ConflictRegistry,
     private readonly onSourcesChanged: () => void
   ) {
+    this.viewMode =
+      state.get<RepositoryViewMode>(REPOSITORY_VIEW_MODE_KEY) === "tree"
+        ? "tree"
+        : "list";
+    void vscode.commands.executeCommand(
+      "setContext",
+      REPOSITORY_TREE_CONTEXT,
+      this.viewMode === "tree"
+    );
     this.rebuildWatchers();
     this.remoteTimer = setInterval(
       () => this.scheduleScan(true, 0),
@@ -117,6 +145,20 @@ export class RepositoryTreeProvider
 
   refresh(checkRemote = true): void {
     this.scheduleScan(checkRemote, 0);
+  }
+
+  setViewMode(mode: RepositoryViewMode): void {
+    if (this.viewMode === mode) {
+      return;
+    }
+    this.viewMode = mode;
+    void this.state.update(REPOSITORY_VIEW_MODE_KEY, mode);
+    void vscode.commands.executeCommand(
+      "setContext",
+      REPOSITORY_TREE_CONTEXT,
+      mode === "tree"
+    );
+    this.emitter.fire(undefined);
   }
 
   reconfigure(): void {
@@ -254,14 +296,26 @@ export class RepositoryTreeProvider
       item.iconPath = new vscode.ThemeIcon("request-changes");
       return item;
     }
+    if (node.kind === "changedProject") {
+      const item = new vscode.TreeItem(
+        node.displayName,
+        vscode.TreeItemCollapsibleState.Expanded
+      );
+      item.iconPath = vscode.ThemeIcon.Folder;
+      return item;
+    }
     if (node.kind === "changedThread") {
       const item = new vscode.TreeItem(
         node.displayName,
         vscode.TreeItemCollapsibleState.Collapsed
       );
-      item.description = `${node.total} 個檔案`;
+      item.description = node.project?.displayName;
       item.tooltip = `${node.displayName}\n同一個 thread 的 ${node.total} 個 rollout 檔`;
-      item.iconPath = new vscode.ThemeIcon("comment-discussion");
+      item.iconPath = vscode.Uri.joinPath(
+        this.extensionUri,
+        "media",
+        `${node.tool}.png`
+      );
       return item;
     }
     if (node.kind === "changedSession") {
@@ -272,8 +326,9 @@ export class RepositoryTreeProvider
           ? vscode.TreeItemCollapsibleState.Collapsed
           : vscode.TreeItemCollapsibleState.None
       );
-      // 子代理是跟著主 thread 一起備份的，所以檔案數掛在 thread 這一列上。
-      item.description = node.total > 1 ? `${node.total} 個檔案` : added ? "新增" : "已變更";
+      // 跟 VS Code 原始檔控制一致：名稱後方以原生的次要文字樣式顯示專案名稱；
+      // 新增／已變更則由列尾的 U/M decoration 表示。
+      item.description = node.session.project?.displayName;
       item.tooltip =
         `${node.displayName}\n` +
         (added ? "尚未備份過" : "備份後有新內容") +
@@ -284,7 +339,12 @@ export class RepositoryTreeProvider
         added ? "unbacked" : "modified",
         node.session.file
       );
-      item.iconPath = new vscode.ThemeIcon("comment-discussion");
+      item.iconPath = vscode.Uri.joinPath(
+        this.extensionUri,
+        "media",
+        `${node.session.tool}.png`
+      );
+      item.contextValue = "changedSession";
       item.command = {
         command: "sessionBackup.previewSession",
         title: "預覽",
@@ -370,7 +430,9 @@ export class RepositoryTreeProvider
   async getChildren(node?: RepositoryNode): Promise<RepositoryNode[]> {
     if (node) {
       if (node.kind === "changes") {
-        const items: RepositoryNode[] = [...this.changed];
+        const items: RepositoryNode[] = [
+          ...(this.viewMode === "tree" ? this.changedProjects : this.changed),
+        ];
         if (this.changedTotal > this.changedShown) {
           items.push({
             kind: "overflow",
@@ -378,6 +440,9 @@ export class RepositoryTreeProvider
           });
         }
         return items;
+      }
+      if (node.kind === "changedProject") {
+        return node.children;
       }
       if (node.kind === "changedThread") {
         return node.children;
@@ -601,7 +666,37 @@ export class RepositoryTreeProvider
       shown += group.total;
     }
     this.changed = rows;
+    this.changedProjects = this.groupByProject(rows);
     this.changedShown = shown;
+  }
+
+  private groupByProject(rows: RepositoryNode[]): RepositoryNode[] {
+    const projects = new Map<
+      string,
+      { displayName: string; children: RepositoryNode[] }
+    >();
+    for (const row of rows) {
+      const project =
+        row.kind === "changedSession"
+          ? row.session.project
+          : row.kind === "changedThread"
+            ? row.project
+            : undefined;
+      const key = project?.id ?? "";
+      const group = projects.get(key) ?? {
+        displayName: project?.displayName ?? "未識別專案",
+        children: [],
+      };
+      group.children.push(row);
+      projects.set(key, group);
+    }
+    return [...projects.values()]
+      .sort((a, b) => a.displayName.localeCompare(b.displayName))
+      .map((project) => ({
+        kind: "changedProject" as const,
+        displayName: project.displayName,
+        children: project.children,
+      }));
   }
 
   private async buildChangedNode(node: ChangedNode, total: number): Promise<RepositoryNode> {
@@ -631,6 +726,8 @@ export class RepositoryTreeProvider
     const first = roots[0];
     return {
       kind: "changedThread",
+      tool: group.tool,
+      project: first?.kind === "changedSession" ? first.session.project : undefined,
       displayName: first?.kind === "changedSession" ? first.displayName : group.id,
       total: group.total,
       children: roots,

@@ -76,6 +76,14 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "sessionBackup.repositoryViewAsTree",
+        "title": "樹狀顯示"
+      },
+      {
+        "command": "sessionBackup.repositoryViewAsList",
+        "title": "清單顯示"
+      },
+      {
         "command": "sessionBackup.resolveConflict",
         "title": "解決 Session 衝突..."
       },
@@ -107,6 +115,14 @@
       {
         "command": "sessionBackup.previewSession",
         "title": "預覽對話"
+      },
+      {
+        "command": "sessionBackup.openConversation",
+        "title": "在對話開啟",
+        "icon": {
+          "light": "media/light/open-in-chat.svg",
+          "dark": "media/dark/open-in-chat.svg"
+        }
       },
       {
         "command": "sessionBackup.exportSession",
@@ -146,6 +162,16 @@
           "group": "navigation"
         },
         {
+          "command": "sessionBackup.repositoryViewAsTree",
+          "when": "view == sessionBackup.repository && !sessionBackup.repositoryTreeView",
+          "group": "1_view@1"
+        },
+        {
+          "command": "sessionBackup.repositoryViewAsList",
+          "when": "view == sessionBackup.repository && sessionBackup.repositoryTreeView",
+          "group": "1_view@1"
+        },
+        {
           "command": "sessionBackup.refreshSessions",
           "when": "view == sessionBackup.sessions",
           "group": "navigation"
@@ -156,6 +182,26 @@
           "command": "sessionBackup.reconnectRemote",
           "when": "view == sessionBackup.repository && viewItem == connected",
           "group": "inline"
+        },
+        {
+          "command": "sessionBackup.openConversation",
+          "when": "view == sessionBackup.sessions && viewItem =~ /^session/",
+          "group": "inline"
+        },
+        {
+          "command": "sessionBackup.openConversation",
+          "when": "view == sessionBackup.repository && viewItem == changedSession",
+          "group": "inline"
+        },
+        {
+          "command": "sessionBackup.openConversation",
+          "when": "view == sessionBackup.repository && viewItem == changedSession",
+          "group": "1_open@1"
+        },
+        {
+          "command": "sessionBackup.openConversation",
+          "when": "view == sessionBackup.sessions && viewItem =~ /^session/",
+          "group": "2_export@0"
         },
         {
           "command": "sessionBackup.exportSession",
@@ -206,6 +252,14 @@
           "when": "false"
         },
         {
+          "command": "sessionBackup.repositoryViewAsTree",
+          "when": "false"
+        },
+        {
+          "command": "sessionBackup.repositoryViewAsList",
+          "when": "false"
+        },
+        {
           "command": "sessionBackup.resolveConflict",
           "when": "false"
         },
@@ -215,6 +269,10 @@
         },
         {
           "command": "sessionBackup.previewSession",
+          "when": "false"
+        },
+        {
+          "command": "sessionBackup.openConversation",
           "when": "false"
         },
         {

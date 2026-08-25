@@ -20,7 +20,7 @@ describe("previewHtml", () => {
       ]),
       "n0"
     );
-    assert.ok(html.includes('<article class="turn user">'));
+    assert.ok(html.includes('<article class="turn user" id="q0">'));
     assert.ok(html.includes('<div class="bubble">'));
     assert.ok(html.includes('<article class="turn assistant">'));
     assert.ok(html.includes("1 次提問"));
@@ -185,5 +185,39 @@ describe("previewHtml", () => {
     }
 
     assert.ok(previewHtml(transcript([]), "n0").includes('id="open-conversation"'));
+  });
+
+  it("lists every question in the side rail and anchors it to that turn", () => {
+    const html = previewHtml(
+      transcript([
+        { role: "user", blocks: [{ kind: "text", text: "## 第一個提問" }] },
+        { role: "assistant", blocks: [{ kind: "text", text: "回覆" }] },
+        {
+          role: "user",
+          blocks: [{ kind: "context", label: "開啟中", detail: "/work/src/a.ts" }],
+        },
+      ]),
+      "n0"
+    );
+    assert.ok(html.includes('<aside id="question-rail"'));
+    assert.ok(html.includes('<article class="turn user" id="q0">'));
+    assert.ok(html.includes('<article class="turn user" id="q1">'));
+    assert.ok(html.includes('data-target="q0"'));
+    assert.ok(html.includes('data-target="q1"'));
+    // markdown 記號不進摘要，只夾帶上下文的提問則用檔案路徑代替
+    assert.ok(html.includes(">第一個提問</span>"));
+    assert.ok(html.includes("a.ts</span>"));
+    assert.ok(html.includes("提問 2"));
+    // 捲過提問後貼在標題列底下的標籤
+    assert.ok(html.includes('id="current-question"'));
+  });
+
+  it("leaves out the rail when nobody asked anything", () => {
+    const html = previewHtml(
+      transcript([{ role: "assistant", blocks: [{ kind: "text", text: "只有回覆" }] }]),
+      "n0"
+    );
+    assert.equal(html.includes('id="question-rail"'), false);
+    assert.equal(html.includes('id="current-question"'), false);
   });
 });

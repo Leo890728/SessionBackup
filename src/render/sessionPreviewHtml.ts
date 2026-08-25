@@ -61,12 +61,14 @@ export function previewHtml(
       <div class="status-divider-inner"><span>${divider.label}</span></div>
     </div>`
     : "";
+  const questions = questionEntries(transcript.messages);
   const body = threadHtml(
     transcript.messages,
     avatar,
     statusDivider,
     state?.backedUpRecords ?? 0
   );
+  const rail = questionRailHtml(questions) + currentQuestionHtml(questions);
   const openConversationButton = `<button id="open-conversation" class="conversation-button" type="button" title="在 ${toolName} 開啟此 session">在對話開啟</button>`;
 
   return `<!doctype html>
@@ -102,6 +104,7 @@ export function previewHtml(
     ${body}
     <footer class="source">${escapeHtml(path.basename(transcript.file))}</footer>
   </main>
+  ${rail}
   </div>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
@@ -121,6 +124,106 @@ export function previewHtml(
       event.preventDefault();
       vscode.postMessage({ command: 'open', path: link.dataset.path, line: link.dataset.line });
     });
+    // 右側提問面板：滑鼠移開就收回去，點手把可以固定展開。
+    const rail = document.getElementById('question-rail');
+    if (rail) {
+      const handle = document.getElementById('rail-handle');
+      const pill = document.getElementById('current-question');
+      const pillIndex = pill.querySelector('.cq-index');
+      const pillText = pill.querySelector('.cq-text');
+      const statusDivider = document.querySelector('.status-divider');
+      const items = Array.from(rail.querySelectorAll('.rail-item'));
+      const targets = items.map((item) => document.getElementById(item.dataset.target));
+      // 收合要自己來：點過的按鈕還留著 focus，光靠 CSS 的 :focus-within 會縮不回去。
+      const collapse = () => {
+        rail.classList.remove('is-open', 'is-keyboard');
+        rail.classList.add('is-dismissed');
+        handle.setAttribute('aria-expanded', 'false');
+      };
+      handle.addEventListener('click', () => {
+        const open = rail.classList.toggle('is-open');
+        handle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (!open) handle.blur();
+      });
+      // 只有鍵盤走進來才撐開；滑鼠點出來的 focus 不算，否則放開滑鼠也收不回去。
+      rail.addEventListener('focusin', (event) => {
+        if (event.target.matches(':focus-visible')) rail.classList.add('is-keyboard');
+      });
+      rail.addEventListener('focusout', (event) => {
+        if (!rail.contains(event.relatedTarget)) rail.classList.remove('is-keyboard');
+      });
+      rail.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        collapse();
+        handle.blur();
+      });
+      // 指標每次進出都把「剛剛收起來」的記號清掉，下一次滑過才展得開。
+      for (const type of ['pointerenter', 'pointerleave']) {
+        rail.addEventListener(type, () => rail.classList.remove('is-dismissed'));
+      }
+      let flash;
+      const jumpTo = (target) => {
+        if (!target) return;
+        // 捲到訊息上緣再讓開標題列，不然跳過去的那則會被標題列壓住。
+        window.scrollTo({
+          top: target.getBoundingClientRect().top + window.scrollY - header.offsetHeight - 16,
+          behavior: 'smooth',
+        });
+        clearTimeout(flash);
+        for (const marked of document.querySelectorAll('.turn.is-target')) {
+          marked.classList.remove('is-target');
+        }
+        target.classList.add('is-target');
+        flash = setTimeout(() => target.classList.remove('is-target'), 1600);
+      };
+      items.forEach((item, index) => {
+        item.addEventListener('click', (event) => {
+          jumpTo(targets[index]);
+          // 用滑鼠點就順手收起來，跳過去的那則才不會被面板擋著；
+          // 鍵盤（event.detail 為 0）則留著，不然 focus 會跑到看不見的地方。
+          if (event.detail === 0) return;
+          collapse();
+          item.blur();
+        });
+      });
+      pill.addEventListener('click', () => jumpTo(document.getElementById(pill.dataset.target)));
+      // 捲動時標出目前看到的是第幾則提問，並把它貼在標題列底下。
+      let pending = false;
+      const markCurrent = () => {
+        pending = false;
+        const headerHeight = header.offsetHeight;
+        let current = -1;
+        targets.forEach((target, index) => {
+          if (target && target.getBoundingClientRect().top <= headerHeight + 24) current = index;
+        });
+        items.forEach((item, index) => item.classList.toggle('is-current', index === current));
+        // 橫桿黏在標題列底下時會佔掉那一條，標籤就往下讓一個橫桿的高度。
+        const stuck =
+          statusDivider && statusDivider.getBoundingClientRect().top <= headerHeight + 1
+            ? statusDivider.offsetHeight
+            : 0;
+        pill.style.top = headerHeight + stuck + 8 + 'px';
+        // 提問本身還看得到就不用貼，整則捲出上緣之後才顯示。
+        const target = current < 0 ? undefined : targets[current];
+        const show = !!target && target.getBoundingClientRect().bottom < headerHeight;
+        if (show) {
+          pillIndex.textContent = items[current].querySelector('.rail-index').textContent;
+          pillText.textContent = items[current].querySelector('.rail-text').textContent;
+          pill.dataset.target = items[current].dataset.target;
+        }
+        pill.classList.toggle('is-visible', show);
+      };
+      window.addEventListener(
+        'scroll',
+        () => {
+          if (pending) return;
+          pending = true;
+          requestAnimationFrame(markCurrent);
+        },
+        { passive: true }
+      );
+      markCurrent();
+    }
   </script>
 </body>
 </html>`;
@@ -144,6 +247,7 @@ function threadHtml(
   }
   const parts: string[] = [];
   let placed = !divider;
+  let questions = 0;
   for (const message of messages) {
     if (
       !placed &&
@@ -153,7 +257,13 @@ function threadHtml(
       parts.push(divider);
       placed = true;
     }
-    parts.push(messageHtml(message, avatar));
+    parts.push(
+      messageHtml(
+        message,
+        avatar,
+        message.role === "user" ? questionAnchorId(questions++) : undefined
+      )
+    );
   }
   if (!placed) {
     parts.push(divider);
@@ -161,7 +271,11 @@ function threadHtml(
   return parts.join("\n");
 }
 
-function messageHtml(message: TranscriptMessage, avatar: string): string {
+function messageHtml(
+  message: TranscriptMessage,
+  avatar: string,
+  questionId?: string
+): string {
   const time = formatTime(message.timestamp);
   const blocks = message.blocks.map(blockHtml).join("\n");
   if (message.role === "notice") {
@@ -170,7 +284,7 @@ function messageHtml(message: TranscriptMessage, avatar: string): string {
       .join("")}</div>`;
   }
   if (message.role === "user") {
-    return `<article class="turn user">
+    return `<article class="turn user"${questionId ? ` id="${questionId}"` : ""}>
       <div class="bubble">${blocks}</div>
       ${time ? `<div class="stamp">${time}</div>` : ""}
     </article>`;
@@ -182,6 +296,105 @@ function messageHtml(message: TranscriptMessage, avatar: string): string {
       ${time ? `<div class="stamp">${time}</div>` : ""}
     </div>
   </article>`;
+}
+
+/** 側邊提問面板的一筆，對應訊息串上的一則使用者訊息。 */
+interface QuestionEntry {
+  /** 訊息 article 的 id，點清單就是捲到它。 */
+  id: string;
+  /** 第幾次提問，從 1 開始。 */
+  ordinal: number;
+  summary: string;
+}
+
+/**
+ * 提問清單。編號規則與 threadHtml 掛 anchor 的規則一致（依出現順序數使用者訊息），
+ * 兩邊才對得起來。
+ */
+function questionEntries(messages: TranscriptMessage[]): QuestionEntry[] {
+  const entries: QuestionEntry[] = [];
+  for (const message of messages) {
+    if (message.role !== "user") {
+      continue;
+    }
+    entries.push({
+      id: questionAnchorId(entries.length),
+      ordinal: entries.length + 1,
+      summary: questionSummary(message),
+    });
+  }
+  return entries;
+}
+
+function questionAnchorId(index: number): string {
+  return `q${index}`;
+}
+
+/**
+ * 摘要只要認得出是哪則提問就夠：取文字內容壓成一行，並拿掉 markdown 記號。
+ * 只夾帶 IDE 上下文的提問沒有文字可取，就用那個檔案的路徑當標示。
+ */
+function questionSummary(message: TranscriptMessage, max = 80): string {
+  const text = message.blocks
+    .map((block) => (block.kind === "text" ? block.text : ""))
+    .join(" ")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/[#>*_`~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) {
+    const context = message.blocks.find((block) => block.kind === "context");
+    return context && context.kind === "context"
+      ? shortPath(context.detail, 40)
+      : "（沒有文字內容）";
+  }
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/**
+ * 貼在右緣的提問清單：平常只露出手把，滑過才滑出來。對話一長，要回到自己問過的
+ * 某一題就得一路往回捲，這條就是那個捷徑。
+ */
+function questionRailHtml(questions: QuestionEntry[]): string {
+  if (!questions.length) {
+    return "";
+  }
+  const items = questions
+    .map(
+      (question) =>
+        `<li><button class="rail-item" type="button" data-target="${question.id}" title="${escapeHtml(
+          question.summary
+        )}"><span class="rail-index">${question.ordinal}</span><span class="rail-text">${escapeHtml(
+          question.summary
+        )}</span></button></li>`
+    )
+    .join("\n");
+  return `<aside id="question-rail" class="question-rail" aria-label="提問清單">
+    <button id="rail-handle" class="rail-handle" type="button" aria-expanded="false" aria-controls="question-list" title="提問清單（點一下固定展開）">
+      <span class="rail-grip" aria-hidden="true"></span>
+      <span class="rail-handle-label">提問 ${questions.length}</span>
+    </button>
+    <div class="rail-body">
+      <ol id="question-list" class="rail-list">
+        ${items}
+      </ol>
+    </div>
+  </aside>`;
+}
+
+/**
+ * 捲過一則提問之後，把它貼在標題列底下的小標籤，點了就回到那則。
+ * 內容由腳本填，這裡只留空殼；用 fixed 浮在對話上而不佔版面高度，
+ * 否則它一出現就把內容往下推，推完又變成「還看得到提問」而自己閃掉。
+ */
+function currentQuestionHtml(questions: QuestionEntry[]): string {
+  if (!questions.length) {
+    return "";
+  }
+  return `<button id="current-question" class="current-question" type="button" title="回到這則提問">
+    <span class="cq-index" aria-hidden="true"></span>
+    <span class="cq-text"></span>
+  </button>`;
 }
 
 function blockHtml(block: TranscriptBlock): string {
@@ -580,6 +793,131 @@ button:focus-visible {
   font-size: 13px;
   color: var(--muted);
 }
+/*
+ * 提問清單貼在右緣，平常只露出手把；滑過或用鍵盤 focus 進去才滑出來，
+ * 免得一直蓋著對話。點手把可以固定展開，捲清單時就不會一離開手把就收回去。
+ */
+.question-rail {
+  position: fixed;
+  top: 50%;
+  right: 0;
+  z-index: 3;
+  display: flex;
+  align-items: stretch;
+  max-height: min(70vh, 620px);
+  transform: translate(calc(100% - 26px), -50%);
+  transition: transform 0.22s ease;
+}
+.question-rail:hover:not(.is-dismissed),
+.question-rail.is-keyboard,
+.question-rail.is-open { transform: translate(0, -50%); }
+.rail-handle {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 26px;
+  padding: 14px 0;
+  border-right: 0;
+  border-radius: 10px 0 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+.rail-handle-label { writing-mode: vertical-rl; white-space: nowrap; }
+.rail-grip {
+  flex: none;
+  width: 3px;
+  height: 20px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.55;
+}
+.question-rail:hover:not(.is-dismissed) .rail-handle,
+.question-rail.is-keyboard .rail-handle,
+.question-rail.is-open .rail-handle { border-color: var(--accent); color: var(--accent); }
+.rail-body {
+  width: 272px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-right: 0;
+  border-radius: 12px 0 0 12px;
+  background: var(--surface);
+  box-shadow: -10px 0 26px rgba(0, 0, 0, 0.14);
+}
+.rail-list { margin: 0; padding: 8px; list-style: none; }
+.rail-item {
+  display: flex;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  line-height: 1.45;
+}
+.rail-item:hover { border-color: transparent; border-left-color: var(--accent); background: var(--bubble); color: var(--text); }
+.rail-item:active { transform: none; }
+.rail-item.is-current { border-left-color: var(--accent); color: var(--accent); }
+.rail-index {
+  flex: none;
+  width: 1.8em;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.rail-item.is-current .rail-index { color: var(--accent); }
+.rail-text {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 12.5px;
+}
+/* 跳過去之後閃一下，才看得出停在哪一則。 */
+.turn.user.is-target .bubble {
+  box-shadow: 0 0 0 2px var(--accent);
+  transition: box-shadow 0.4s ease;
+}
+/* 貼在標題列底下的「目前這一題」，太長就截成 …。 */
+.current-question {
+  position: fixed;
+  left: 50%;
+  top: calc(var(--header-h, 56px) + 8px);
+  z-index: 2;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: fit-content;
+  max-width: min(46rem, calc(100% - 48px));
+  padding: 5px 15px;
+  border-radius: 999px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14);
+  font-size: 12.5px;
+  color: var(--muted);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -6px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.current-question.is-visible { opacity: 1; pointer-events: auto; transform: translate(-50%, 0); }
+/* 通用的 :active 位移會把置中的 translate 蓋掉，這裡自己補一組。 */
+.current-question:active { transform: translate(-50%, 1px); }
+.cq-index { flex: none; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--accent); }
+.cq-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 620px) {
+  .rail-body { width: 200px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .question-rail, .current-question { transition: none; }
+}
+
 .empty { color: var(--muted); text-align: center; padding: 48px 0; }
 .source { margin-top: 40px; font-size: 11px; color: var(--muted); text-align: center; }
 `;

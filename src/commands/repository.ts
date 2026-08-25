@@ -72,6 +72,12 @@ export function registerRepositoryCommands(deps: CommandDeps): vscode.Disposable
     vscode.commands.registerCommand("sessionBackup.refreshRepository", () =>
       repository.refresh(),
     ),
+    vscode.commands.registerCommand("sessionBackup.repositoryViewAsTree", () =>
+      repository.setViewMode("tree"),
+    ),
+    vscode.commands.registerCommand("sessionBackup.repositoryViewAsList", () =>
+      repository.setViewMode("list"),
+    ),
     vscode.commands.registerCommand("sessionBackup.openRepo", () => {
       vscode.env.openExternal(vscode.Uri.file(getConfig().repoPath));
     }),

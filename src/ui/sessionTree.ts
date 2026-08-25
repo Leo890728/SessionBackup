@@ -16,8 +16,10 @@ import {
   StatusLookup,
 } from "../store/sessionStatus";
 import { ProjectMappingRegistry } from "../store/projectMapping";
+import { filesWithSecrets } from "../security/sessionSecretScan";
 import {
   machineIdFromConfig,
+  MachineManifest,
   manifestRelativePath,
   readManifest,
   readMachineManifests,
@@ -53,9 +55,22 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
   private lookup?: Promise<StatusLookup>;
   private unmapped?: Promise<RemoteProject[]>;
+  /** 所有機器的 manifest，per-refresh 快取（待對應清單與雲章共用）。 */
+  private manifests?: Promise<MachineManifest[]>;
   private localProjects?: Promise<ProjectNode[]>;
   /** getTreeItem 是同步的，選取狀態必須先備妥。 */
   private selection = new SelectionSet(getConfig().trackedSessions);
+  /**
+   * 展開中的專案 key。VS Code 不會因為展開就重新要一次 TreeItem，而未追蹤的專案
+   * 用的是自帶 SVG——不像 ThemeIcon.Folder 有檔案圖示佈景主題幫忙換開合那兩張，
+   * 所以要自己記住開合狀態，並在展開／收合時重畫那一列。
+   */
+  private readonly expandedProjects = new Set<string>();
+  /**
+   * 「路徑:mtime:大小」→ 有沒有疑似金鑰。掃描要把整份檔案讀過，所以只在展開專案時
+   * 掃當層的 sessions，並記住結果；檔案沒動過就不重掃，refresh 也沿用。
+   */
+  private readonly secretScanCache = new Map<string, boolean>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -66,6 +81,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     clearSessionCache();
     this.lookup = undefined;
     this.unmapped = undefined;
+    this.manifests = undefined;
     this.localProjects = undefined;
     this.selection = new SelectionSet(getConfig().trackedSessions);
     this._onDidChangeTreeData.fire(undefined);
@@ -107,7 +123,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       this.unmapped = (async () => {
         try {
           const cfg = getConfig();
-          const manifests = await readMachineManifests(cfg.repoPath);
+          const manifests = await this.getMachineManifests();
           const remote = aggregateRemoteProjects(
             manifests,
             machineIdFromConfig(cfg),
@@ -123,6 +139,78 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       })();
     }
     return this.unmapped;
+  }
+
+  /** 備份庫讀不到（還沒建立、磁碟壞掉）就當成沒有備份，側欄照常顯示本機內容。 */
+  private getMachineManifests(): Promise<MachineManifest[]> {
+    if (!this.manifests) {
+      this.manifests = readMachineManifests(getConfig().repoPath).catch(() => []);
+    }
+    return this.manifests;
+  }
+
+  /**
+   * TreeView 的 onDidExpandElement / onDidCollapseElement 轉進來，只為了換資料夾開合圖。
+   * 狀態沒變就不重畫：重畫會讓 collapsibleState 改成 Expanded，VS Code 可能再回報一次
+   * 展開，沒有這道防線就會來回打轉。
+   */
+  setProjectExpanded(node: TreeNode, expanded: boolean): void {
+    if (node.kind !== "project") {
+      return;
+    }
+    if (this.expandedProjects.has(node.key) === expanded) {
+      return;
+    }
+    if (expanded) {
+      this.expandedProjects.add(node.key);
+    } else {
+      this.expandedProjects.delete(node.key);
+    }
+    this._onDidChangeTreeData.fire(node);
+  }
+
+  /**
+   * 未追蹤專案的資料夾圖示：開合 × 雲端有沒有備份，共四張。
+   * SVG 的顏色是寫死的（背景圖片吃不到 currentColor），所以 light／dark 各備一套。
+   */
+  private untrackedFolderIcon(
+    expanded: boolean,
+    backedUp: boolean,
+  ): { light: vscode.Uri; dark: vscode.Uri } {
+    const name = `folder-untracked${expanded ? "-opened" : ""}${
+      backedUp ? "-cloud" : ""
+    }.svg`;
+    return {
+      light: vscode.Uri.joinPath(this.extensionUri, "media", "light", name),
+      dark: vscode.Uri.joinPath(this.extensionUri, "media", "dark", name),
+    };
+  }
+
+  /** 展開某一層時才掃那層的 sessions；回傳掃到金鑰的檔案路徑。 */
+  private async scanSecrets(
+    sessions: readonly SessionInfo[],
+  ): Promise<Set<string>> {
+    const flagged = new Set<string>();
+    if (!getConfig().secretScan) {
+      return flagged;
+    }
+    const key = (info: SessionInfo): string =>
+      `${info.file}:${info.mtime}:${info.size}`;
+    const pending = sessions.filter(
+      (info) => !this.secretScanCache.has(key(info)),
+    );
+    if (pending.length) {
+      const hits = await filesWithSecrets(pending.map((info) => info.file));
+      for (const info of pending) {
+        this.secretScanCache.set(key(info), hits.has(info.file));
+      }
+    }
+    for (const info of sessions) {
+      if (this.secretScanCache.get(key(info))) {
+        flagged.add(info.file);
+      }
+    }
+    return flagged;
   }
 
   getTreeItem(n: TreeNode): vscode.TreeItem {
@@ -147,9 +235,12 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         return item;
       }
       case "project": {
+        const expanded = this.expandedProjects.has(n.key);
         const item = new vscode.TreeItem(
           n.label,
-          vscode.TreeItemCollapsibleState.Collapsed,
+          expanded
+            ? vscode.TreeItemCollapsibleState.Expanded
+            : vscode.TreeItemCollapsibleState.Collapsed,
         );
         item.id = `project:${n.key}`;
         const summaries = n.children.map((child) =>
@@ -179,16 +270,30 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
             ? ""
             : "這個工作目錄在本機不存在——多半是從其他電腦同步回來的對話，" +
               "也可能是資料夾已被移動或刪除。對話仍可瀏覽與勾選。\n\n") +
+          (chosen === 0 && n.backedUp
+            ? "雲端備份庫裡已經有這個專案的對話（圖示右下角的雲）；" +
+              "取消追蹤只是不再更新，既有備份不會被刪除。\n\n"
+            : "") +
           (partial ? PARTIAL_TIP : "") +
           projectSelectionTip(n.children);
-        item.iconPath = n.local
-          ? vscode.ThemeIcon.Folder
-          : new vscode.ThemeIcon(
+        // 已追蹤走 ThemeIcon.Folder：它屬於 file-kind，VS Code 會交給使用者的檔案圖示
+        // 佈景主題畫，也就是實心那顆。未追蹤要「線框且變暗」——單靠 ThemeIcon 做不到
+        // （拿掉 resourceUri 才會退回線框 codicon，但變暗也是 resourceUri 帶來的），
+        // 所以自己帶一張 SVG：iconPath 是 Uri 時圖示固定用它，resourceUri 就只剩調暗。
+        item.iconPath = !n.local
+          ? new vscode.ThemeIcon(
               "cloud",
               new vscode.ThemeColor("descriptionForeground"),
-            );
-        // 底下一則都沒勾就整層調暗，跟未追蹤的對話同一個訊號。
-        item.resourceUri = dimmedUri(chosen === 0, `project:${n.key}`);
+            )
+          : chosen > 0
+            ? vscode.ThemeIcon.Folder
+            : this.untrackedFolderIcon(expanded, n.backedUp);
+        // 底下一則都沒勾就整層調暗，跟未追蹤的對話同一個訊號；已追蹤的也要有 URI，
+        // 檔案圖示佈景主題才會接手（synced 沒有對應的裝飾，不會多畫任何東西）。
+        item.resourceUri = sessionStatusUri(
+          chosen === 0 ? "unselected" : "synced",
+          `project:${n.key}`,
+        );
         item.contextValue = selected ? "projectSelected" : "projectUnselected";
         item.checkboxState = checkbox(selected);
         return item;
@@ -265,6 +370,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           (partial ? ` · ${partial}` : "");
         item.tooltip =
           `${s.title}\n\n` +
+          (n.hasSecret
+            ? "⚠ 掃到疑似金鑰：備份時會逐一跟你確認要不要送上去。\n\n"
+            : "") +
           `狀態:${display.label} — ${display.detail}\n\n` +
           (partial ? `子 sessions ${PARTIAL_TIP}` : "") +
           (s.subagent ? `子代理:${s.subagent}\n` : "") +
@@ -277,7 +385,24 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         // 狀態走 FileDecorationProvider（列尾的 U/M 字母），圖示就退回中性的對話符號，
         // 兩邊都畫狀態只會互相打架。
         item.resourceUri = sessionStatusUri(n.status, s.file);
-        item.iconPath = new vscode.ThemeIcon("comment-discussion");
+        // 掃到疑似金鑰時整顆圖示換掉：這比列尾多一個字母更難忽略，而備份與否
+        // 仍然由 checkbox 與 U/M 標記各自表達，不會被蓋掉。
+        item.iconPath = n.hasSecret
+          ? {
+              light: vscode.Uri.joinPath(
+                this.extensionUri,
+                "media",
+                "light",
+                "secret-warn.svg",
+              ),
+              dark: vscode.Uri.joinPath(
+                this.extensionUri,
+                "media",
+                "dark",
+                "secret-warn.svg",
+              ),
+            }
+          : new vscode.ThemeIcon("comment-discussion");
         item.command = {
           command: "sessionBackup.previewSession",
           title: "預覽",
@@ -347,27 +472,32 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         el.projects.map(async (project) => {
           const projectDir = path.basename(project.dir);
           const sessions = await listClaudeSessions(project.dir);
-          return await Promise.all(
-            sessions.map(async (info) => ({
-              kind: "session" as const,
-              info,
-              claudeProjectDir: projectDir,
-              conversationCwd: el.cwd,
-              status: await resolveSessionStatus(lookup, {
-                tool: info.tool,
-                id: info.backupId,
-                file: info.file,
-                // manifest 中 Claude 的 relativePath 不含機器的 project bucket
-                relativePath: "projects/" + path.basename(info.file),
-                mtimeMs: info.mtime,
-                size: info.size,
-                claudeProjectDir: projectDir,
-              }),
-            })),
-          );
+          return sessions.map((info) => ({ info, projectDir }));
         }),
       );
-      return batches.flat().sort((a, b) => b.info.mtime - a.info.mtime);
+      const entries = batches.flat();
+      // 整層一次掃完：filesWithSecrets 會依磁碟根目錄分組，逐一呼叫只是白開檔。
+      const secrets = await this.scanSecrets(entries.map((e) => e.info));
+      const nodes = await Promise.all(
+        entries.map(async ({ info, projectDir }) => ({
+          kind: "session" as const,
+          info,
+          claudeProjectDir: projectDir,
+          conversationCwd: el.cwd,
+          hasSecret: secrets.has(info.file),
+          status: await resolveSessionStatus(lookup, {
+            tool: info.tool,
+            id: info.backupId,
+            file: info.file,
+            // manifest 中 Claude 的 relativePath 不含機器的 project bucket
+            relativePath: "projects/" + path.basename(info.file),
+            mtimeMs: info.mtime,
+            size: info.size,
+            claudeProjectDir: projectDir,
+          }),
+        })),
+      );
+      return nodes.sort((a, b) => b.info.mtime - a.info.mtime);
     }
     if (el.kind === "codexProject") {
       return this.buildCodexSessionNodes(el);
@@ -464,6 +594,12 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       }),
     );
     const { topLevel, subsByHost } = groupCodexThreads(codexInfos);
+    // manifest 的 id 就是 Claude 的檔名 id 與 Codex 的 backupId，兩邊可以直接比對。
+    const backedUpIds = new Set(
+      (await this.getMachineManifests()).flatMap((manifest) =>
+        manifest.sessions.map((session) => `${session.tool}:${session.id}`),
+      ),
+    );
 
     // 沒有 cwd 的舊紀錄（未識別專案）不算「別台電腦的」，維持在本機那一組。
     const isLocalPath = (cwd: string | undefined): boolean =>
@@ -498,6 +634,17 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           cwd: project.cwd,
           latestMtime: project.latestMtime,
           local: project.local,
+          backedUp: project.ai.some((ai) =>
+            ai.tool === "claude"
+              ? ai.projects.some((claudeProject) =>
+                  claudeProject.sessionIds.some((id) =>
+                    backedUpIds.has(`claude:${id}`),
+                  ),
+                )
+              : collectCodexInfos(ai.sessions, subsByHost).some((info) =>
+                  backedUpIds.has(`codex:${info.backupId}`),
+                ),
+          ),
           children,
         };
       },
@@ -510,6 +657,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   ): Promise<TreeNode[]> {
     const infos = collectCodexInfos(node.topLevel, node.subsByHost);
     const lookup = await this.getLookup();
+    const secrets = await this.scanSecrets(infos);
     const statusByFile = new Map(
       await Promise.all(
         infos.map(
@@ -541,6 +689,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         kind: "session",
         info,
         status: statusByFile.get(info.file) ?? "unbacked",
+        hasSecret: secrets.has(info.file),
         subs: nested?.length ? nested : undefined,
       };
     };

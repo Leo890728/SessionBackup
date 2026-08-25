@@ -10,8 +10,6 @@ VS Code 擴充功能：以 append-only 格式備份 Claude Code 與 Codex 的 JS
 同步流程完全非互動，衝突不跳視窗而是收進側欄等你有空再處理。
 預設本地備份庫是 `~/.session-backup`。
 
-> 0.2 起採綠地格式，不讀取或遷移舊版鏡像備份。請使用新的本地路徑與新的私人儲存庫。
-
 ---
 
 ## 技術堆疊
@@ -27,9 +25,6 @@ VS Code 擴充功能：以 append-only 格式備份 Claude Code 與 Codex 的 JS
 | 格式化 | Prettier 3.9.5 |
 | 打包 | `vsce package` 產生 VSIX |
 
-「零執行期相依」是刻意的設計約束：Markdown 轉換（[markdownHtml.ts](src/markdownHtml.ts)）
-與語法上色（[highlight.ts](src/highlight.ts)）都自己寫，因為預覽 webview 的 CSP 是
-`default-src 'none'`，外部腳本載不進來。
 
 ## 專案架構
 

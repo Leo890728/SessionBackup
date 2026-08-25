@@ -172,7 +172,7 @@ async function backedUpRecords(tool: Tool, file: string): Promise<number> {
  * Claude Code 必須在 session 所屬專案的 extension host 中開啟；Codex 則開啟
  * VS Code Chat Sessions 使用的 resource。
  */
-async function openSessionConversation(
+export async function openSessionConversation(
   tool: Tool,
   sessionId: string,
   conversationCwd: string | undefined,

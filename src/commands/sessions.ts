@@ -5,9 +5,49 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { renderSessionMarkdown } from "../agents/transcript";
-import { showSessionPreview } from "../ui/sessionPreview";
+import {
+  openSessionConversation,
+  showSessionPreview,
+} from "../ui/sessionPreview";
 import { TreeNode } from "../ui/treeNodes";
+import { ChangedSessionNode } from "../ui/repositoryTree";
+import { ProjectMappingRegistry } from "../store/projectMapping";
+import { Tool } from "../agents/types";
 import { CommandDeps } from "./deps";
+
+/**
+ * Sessions 側欄傳進來的是樹節點，Github Backup 側欄的變更清單傳的是另一種節點，
+ * 兩邊記 session 身分的欄位不一樣，在這裡收斂成同一組開啟參數。
+ */
+async function conversationTarget(
+  node: TreeNode | ChangedSessionNode | undefined,
+  projects: ProjectMappingRegistry,
+): Promise<{ tool: Tool; sessionId: string; cwd?: string } | undefined> {
+  if (node?.kind === "session") {
+    return {
+      tool: node.info.tool,
+      sessionId:
+        node.info.tool === "claude" ? node.info.id : node.info.backupId,
+      cwd: node.conversationCwd,
+    };
+  }
+  if (node?.kind === "changedSession") {
+    const session = node.session;
+    // 變更清單沒帶工作目錄，但 Claude 得知道要在哪個專案視窗開，只好回頭查映射。
+    const mapping = session.project
+      ? await projects.locateProject(session.project, false)
+      : undefined;
+    return {
+      tool: session.tool,
+      sessionId:
+        session.tool === "claude"
+          ? session.ownId ?? session.id
+          : session.id,
+      cwd: mapping?.localPath,
+    };
+  }
+  return undefined;
+}
 
 export function registerSessionsCommands(deps: CommandDeps): vscode.Disposable[] {
   const { context, tree } = deps;
@@ -29,6 +69,23 @@ export function registerSessionsCommands(deps: CommandDeps): vscode.Disposable[]
           context.globalStorageUri.fsPath,
           node.status,
           node.conversationCwd,
+        );
+      },
+    ),
+    // 兩個側欄列尾（滑過才出現）與右鍵都指向這裡，
+    // 跟預覽面板的「在對話開啟」同一條路徑。
+    vscode.commands.registerCommand(
+      "sessionBackup.openConversation",
+      async (node?: TreeNode | ChangedSessionNode) => {
+        const target = await conversationTarget(node, deps.projects);
+        if (!target) {
+          return;
+        }
+        await openSessionConversation(
+          target.tool,
+          target.sessionId,
+          target.cwd,
+          context.globalStorageUri.fsPath,
         );
       },
     ),

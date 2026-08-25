@@ -113,7 +113,7 @@ export interface ChangedNode {
 
 /** 同一個 thread 的所有變動檔案（主 thread + 子代理 + 接續的 rollout）。 */
 export interface ChangedGroup {
-  tool: string;
+  tool: LocalSession["tool"];
   id: string;
   /** 這個 thread 底下的變動檔案總數 */
   total: number;

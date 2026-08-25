@@ -34,6 +34,37 @@ export async function sessionDisplayName(session: LocalSession): Promise<string>
   }
 }
 
+/**
+ * 只回答「這些檔案有沒有掃到疑似金鑰」。側欄用得到金鑰旗標，但不需要 LocalSession
+ * 那一整包中繼資料，也不必解析標題；掃描本身仍走同一組樣式。
+ */
+export async function filesWithSecrets(
+  files: readonly string[]
+): Promise<Set<string>> {
+  const groups = new Map<string, Map<string, string>>();
+  for (const file of files) {
+    const root = path.parse(file).root;
+    let group = groups.get(root);
+    if (!group) {
+      group = new Map<string, string>();
+      groups.set(root, group);
+    }
+    // 以 rel 回查原本的路徑，免得 join 回去時大小寫或分隔符跟來源對不上。
+    group.set(path.relative(root, file), file);
+  }
+
+  const hits = new Set<string>();
+  for (const [root, byRel] of groups) {
+    for (const finding of await scanFiles(root, [...byRel.keys()])) {
+      const file = byRel.get(finding.rel);
+      if (file) {
+        hits.add(file);
+      }
+    }
+  }
+  return hits;
+}
+
 export async function scanSessionsForSecrets(
   sessions: LocalSession[]
 ): Promise<SessionSecretMatch[]> {

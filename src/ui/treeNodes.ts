@@ -30,6 +30,11 @@ export type ProjectNode = {
   latestMtime: number;
   /** 工作目錄在這台電腦上找得到；false 會顯示成「未對應」並排到最後。 */
   local: boolean;
+  /**
+   * 備份庫裡已經有這個專案的對話（不限哪一台電腦）。取消追蹤後本機看不出
+   * 「以前備份過」，圖示上的雲章就是靠這個旗標決定要不要畫。
+   */
+  backedUp: boolean;
   children: (ClaudeProjectNode | CodexProjectNode)[];
 };
 
@@ -55,6 +60,8 @@ export type TreeNode =
       status: SessionSyncStatus;
       claudeProjectDir?: string;
       conversationCwd?: string;
+      /** 掃到疑似金鑰；側欄用警告圖示取代對話圖示。sessionBackup.secretScan 關掉時恆為 false。 */
+      hasSecret?: boolean;
       subs?: TreeNode[];
     }
   /** 遠端備份過、本機還沒有對應資料夾的 Claude 專案；點一下建立映射。 */
