@@ -1,7 +1,7 @@
 /** 選擇要備份哪些對話。 */
 
 import * as vscode from "vscode";
-import { getConfig, updateSelectedSessions } from "../config";
+import { getConfig, updateTrackedSessions } from "../config";
 import { describeSelectionKey } from "../store/selection";
 import { nodeLabel } from "../ui/nodeLabel";
 import { TreeNode } from "../ui/treeNodes";
@@ -18,7 +18,7 @@ export function registerSelectionCommands(deps: CommandDeps): vscode.Disposable[
         }
         await tree.setSelected(node, true);
         vscode.window.showInformationMessage(
-          `Session Backup: 已加入備份 — ${nodeLabel(node)}`,
+          `Session Backup: 已納入追蹤 — ${nodeLabel(node)}`,
         );
       },
     ),
@@ -30,17 +30,17 @@ export function registerSelectionCommands(deps: CommandDeps): vscode.Disposable[
         }
         await tree.setSelected(node, false);
         vscode.window.showInformationMessage(
-          `Session Backup: 已移出備份 — ${nodeLabel(node)}（已上傳的舊備份不會被刪除）`,
+          `Session Backup: 已取消追蹤 — ${nodeLabel(node)}（已備份的內容仍保留在備份庫）`,
         );
       },
     ),
     vscode.commands.registerCommand(
       "sessionBackup.manageSelection",
       async () => {
-        const selected = getConfig().selectedSessions;
+        const selected = getConfig().trackedSessions;
         if (!selected.length) {
           vscode.window.showInformationMessage(
-            "Session Backup: 尚未選取任何要備份的對話，請在 Sessions 側欄勾選。",
+            "Session Backup: 尚未追蹤任何對話，請在 Sessions 側欄勾選。",
           );
           return;
         }
@@ -51,19 +51,19 @@ export function registerSelectionCommands(deps: CommandDeps): vscode.Disposable[
           })),
           {
             canPickMany: true,
-            placeHolder: "勾選要刪除的選取規則（保留不動的請勿勾選）",
+            placeHolder: "勾選要刪除的追蹤規則（保留不動的請勿勾選）",
           },
         );
         if (!picks?.length) {
           return;
         }
         const remove = new Set(picks.map((p) => p.description));
-        await updateSelectedSessions((current) =>
+        await updateTrackedSessions((current) =>
           current.filter((key) => !remove.has(key)),
         );
         tree.reloadSelection();
         vscode.window.showInformationMessage(
-          `Session Backup: 已刪除 ${picks.length} 條選取規則。`,
+          `Session Backup: 已刪除 ${picks.length} 條追蹤規則。`,
         );
       },
     )

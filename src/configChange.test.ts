@@ -9,7 +9,7 @@ const changed = (...keys: string[]) => (key: string) =>
 describe("configReaction", () => {
   it("reloads the selection and restarts the timer when the selection changes", () => {
     // 勾選變更不該重建 watcher：它只縮放本機掃描範圍。
-    assert.deepEqual(configReaction(changed("sessionBackup.selectedSessions")), {
+    assert.deepEqual(configReaction(changed("sessionBackup.trackedSessions")), {
       reloadSelection: true,
       reconfigure: false,
       restartTimer: true,

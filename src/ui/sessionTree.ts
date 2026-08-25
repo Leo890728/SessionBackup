@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
-import { getConfig, updateSelectedSessions } from "../config";
+import { getConfig, updateTrackedSessions } from "../config";
 import { applyRule, partialHint, SelectionSet } from "../store/selection";
 import { SessionInfo } from "../agents/types";
 import { clearSessionCache } from "../agents/sessionFile";
@@ -55,7 +55,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   private unmapped?: Promise<RemoteProject[]>;
   private localProjects?: Promise<ProjectNode[]>;
   /** getTreeItem 是同步的，選取狀態必須先備妥。 */
-  private selection = new SelectionSet(getConfig().selectedSessions);
+  private selection = new SelectionSet(getConfig().trackedSessions);
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -67,7 +67,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     this.lookup = undefined;
     this.unmapped = undefined;
     this.localProjects = undefined;
-    this.selection = new SelectionSet(getConfig().selectedSessions);
+    this.selection = new SelectionSet(getConfig().trackedSessions);
     this._onDidChangeTreeData.fire(undefined);
   }
 
@@ -75,7 +75,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   reloadSelection(): void {
     this.lookup = undefined;
     this.unmapped = undefined;
-    this.selection = new SelectionSet(getConfig().selectedSessions);
+    this.selection = new SelectionSet(getConfig().trackedSessions);
     this._onDidChangeTreeData.fire(undefined);
   }
 
@@ -187,7 +187,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
               "cloud",
               new vscode.ThemeColor("descriptionForeground"),
             );
-        // 底下一則都沒勾就整層調暗，跟未選取的對話同一個訊號。
+        // 底下一則都沒勾就整層調暗，跟未追蹤的對話同一個訊號。
         item.resourceUri = dimmedUri(chosen === 0, `project:${n.key}`);
         item.contextValue = selected ? "projectSelected" : "projectUnselected";
         item.checkboxState = checkbox(selected);
@@ -390,19 +390,19 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     }
     if (node.kind === "project") {
       // 外層專案等同逐一操作底下的 AI：Claude 保留 project scope，Codex 套目前 sessions。
-      await updateSelectedSessions((current) =>
+      await updateTrackedSessions((current) =>
         node.children.reduce(
           (next, child) => applyAiSelection(next, child, selected),
           [...current],
         ),
       );
     } else if (node.kind === "claudeProject" || node.kind === "codexProject") {
-      await updateSelectedSessions((current) =>
+      await updateTrackedSessions((current) =>
         applyAiSelection(current, node, selected),
       );
     } else {
       const { key, target, level } = ruleFor(node);
-      await updateSelectedSessions((current) =>
+      await updateTrackedSessions((current) =>
         applyRule(
           current,
           key,
@@ -549,7 +549,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
   }
 }
 
-/** 整層都沒勾時才給裝飾；有勾到一部分就維持正常顏色，不然會蓋掉「部分選取」的資訊。 */
+/** 整層都沒勾時才給裝飾；有勾到一部分就維持正常顏色，不然會蓋掉「部分追蹤」的資訊。 */
 function dimmedUri(dim: boolean, key: string): vscode.Uri | undefined {
   return dim ? sessionStatusUri("unselected", key) : undefined;
 }

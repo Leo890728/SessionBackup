@@ -8,9 +8,11 @@ import { ConflictRecord, ConflictRegistry } from "./store/conflicts";
 import { showConflictComparison } from "./ui/conflictView";
 import {
   clearLegacyIgnoredSessions,
+  clearLegacySelectedSessions,
   getConfig,
   readLegacyIgnoredSessions,
-  updateSelectedSessions,
+  readLegacySelectedSessions,
+  updateTrackedSessions,
 } from "./config";
 import { registerDebugCommands } from "./ui/debug";
 import { getSessionToken } from "./git/github/auth";
@@ -62,7 +64,11 @@ export function activate(context: vscode.ExtensionContext): void {
   void migrateMachineIdentity(context, out);
   const projects = new ProjectMappingRegistry(context.globalStorageUri.fsPath);
   const tree = new SessionTreeProvider(context.extensionUri, projects);
-  void migrateToSelection(context, out, tree);
+  // 先搬設定鍵再跑選擇制遷移：順序反過來的話，migrateToSelection 會看到空的
+  // trackedSessions，把使用者既有的規則當成「還沒遷移」重算一次。
+  void migrateTrackedSessionsKey(out, tree).then(() =>
+    migrateToSelection(context, out, tree),
+  );
   const conflicts = new ConflictRegistry(context.globalStorageUri.fsPath);
   const repository = new RepositoryTreeProvider(out, projects, conflicts, () =>
     tree.refresh(),
@@ -237,6 +243,31 @@ async function migrateMachineIdentity(
 }
 
 /**
+ * 設定鍵 sessionBackup.selectedSessions 改名為 trackedSessions（介面統一用「追蹤」）。
+ * 不搬的話舊使用者的白名單會突然變成空的，所有對話一起停止備份而且不會有任何提示。
+ */
+async function migrateTrackedSessionsKey(
+  out: vscode.OutputChannel,
+  tree: SessionTreeProvider,
+): Promise<void> {
+  const legacy = readLegacySelectedSessions();
+  if (!legacy.length) {
+    return;
+  }
+  try {
+    // 合併而不是覆蓋：兩個鍵同時有值時（手動改過設定）不該把新鍵的規則丟掉。
+    await updateTrackedSessions((current) => [...current, ...legacy]);
+    await clearLegacySelectedSessions();
+    tree.reloadSelection();
+    out.appendLine(
+      `已將 ${legacy.length} 條 sessionBackup.selectedSessions 規則搬到 sessionBackup.trackedSessions`,
+    );
+  } catch (e: any) {
+    out.appendLine("追蹤設定搬移失敗：" + e.message);
+  }
+}
+
+/**
  * 0.3.0 起備份改為「選擇制」：只備份使用者勾選的對話。
  * 升級時把本機 manifest 中已備份過的 session 直接設為選取，
  * 避免既有備份在使用者不知情的情況下停止更新；舊的忽略清單轉成排除規則。
@@ -252,7 +283,7 @@ async function migrateToSelection(
   try {
     const cfg = getConfig();
     const legacy = readLegacyIgnoredSessions();
-    if (!cfg.selectedSessions.length) {
+    if (!cfg.trackedSessions.length) {
       const manifest = await readManifest(
         path.join(
           cfg.repoPath,
@@ -261,10 +292,10 @@ async function migrateToSelection(
       );
       const keys = initialSelectionKeys(manifest, legacy);
       if (keys.length) {
-        await updateSelectedSessions(() => keys);
+        await updateTrackedSessions(() => keys);
         tree.reloadSelection();
         out.appendLine(
-          `備份改為選擇制：已將 ${keys.length} 個先前備份過的 session 設為選取，` +
+          `備份改為選擇制：已將 ${keys.length} 個先前備份過的 session 設為追蹤，` +
             "之後新增的對話請自行勾選",
         );
       }
@@ -278,7 +309,7 @@ async function migrateToSelection(
     }
     await context.globalState.update("selectionMigrated", true);
   } catch (e: any) {
-    out.appendLine("備份選取遷移失敗：" + e.message);
+    out.appendLine("備份追蹤遷移失敗：" + e.message);
   }
 }
 
@@ -287,7 +318,7 @@ async function notifySelectionChange(migrated: number): Promise<void> {
   const message = migrated
     ? `Session Backup: 備份改為選擇制，已保留 ${migrated} 個先前備份過的對話；` +
       "新的對話要自行勾選才會備份。"
-    : "Session Backup: 備份改為選擇制，請先在 Sessions 側欄勾選要備份的對話。";
+    : "Session Backup: 備份改為選擇制，請先在 Sessions 側欄勾選要追蹤的對話。";
   const pick = await vscode.window.showInformationMessage(message, open);
   if (pick === open) {
     await vscode.commands.executeCommand("sessionBackup.sessions.focus");

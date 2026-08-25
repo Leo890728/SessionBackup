@@ -65,7 +65,7 @@ describe("SelectionSet", () => {
   });
 
   it("spots narrower rules under a tool", () => {
-    // 沒勾整個工具時，個別加選的規則代表部分選取。
+    // 沒勾整個工具時，個別加選的規則代表部分追蹤。
     const added = new SelectionSet(["session:codex:c1"]);
     assert.equal(added.hasNarrowerRule("codex", false), true);
     assert.equal(added.hasNarrowerRule("claude", false), false);
@@ -88,7 +88,7 @@ describe("SelectionSet", () => {
 
 describe("partialHint", () => {
   it("only labels a genuinely half-checked group", () => {
-    assert.equal(partialHint(2, 5), "部分選取 2/5");
+    assert.equal(partialHint(2, 5), "部分追蹤 2/5");
     assert.equal(partialHint(0, 5), undefined);
     assert.equal(partialHint(5, 5), undefined);
     assert.equal(partialHint(0, 0), undefined);

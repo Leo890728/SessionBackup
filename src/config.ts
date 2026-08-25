@@ -17,7 +17,7 @@ export interface BackupConfig {
   maxFileSizeMB: number;
   secretScan: boolean;
   /** 備份白名單規則，見 selection.ts。沒有規則涵蓋的 session 不會備份。 */
-  selectedSessions: string[];
+  trackedSessions: string[];
 }
 
 export function expandHome(p: string): string {
@@ -51,22 +51,39 @@ export function getConfig(): BackupConfig {
     backupOnStartup: c.get("backupOnStartup", false),
     maxFileSizeMB: c.get("maxFileSizeMB", 95),
     secretScan: c.get("secretScan", true),
-    selectedSessions: c
-      .get<string[]>("selectedSessions", [])
+    trackedSessions: c
+      .get<string[]>("trackedSessions", [])
       .map((s) => s.trim())
       .filter(Boolean),
   };
 }
 
-/** 以 mutate 函式更新備份選取（去重、排序後寫回使用者設定）。 */
-export async function updateSelectedSessions(
+/** 以 mutate 函式更新追蹤清單（去重、排序後寫回使用者設定）。 */
+export async function updateTrackedSessions(
   mutate: (current: string[]) => string[]
 ): Promise<string[]> {
   const c = vscode.workspace.getConfiguration("sessionBackup");
-  const current = c.get<string[]>("selectedSessions", []);
+  const current = c.get<string[]>("trackedSessions", []);
   const next = [...new Set(mutate([...current]).map((s) => s.trim()).filter(Boolean))].sort();
-  await c.update("selectedSessions", next, vscode.ConfigurationTarget.Global);
+  await c.update("trackedSessions", next, vscode.ConfigurationTarget.Global);
   return next;
+}
+
+/** 讀取 1.0 以前的 selectedSessions（僅供一次性遷移使用）。 */
+export function readLegacySelectedSessions(): string[] {
+  return (
+    vscode.workspace
+      .getConfiguration("sessionBackup")
+      .get<string[]>("selectedSessions", []) ?? []
+  )
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export async function clearLegacySelectedSessions(): Promise<void> {
+  await vscode.workspace
+    .getConfiguration("sessionBackup")
+    .update("selectedSessions", undefined, vscode.ConfigurationTarget.Global);
 }
 
 /** 讀取 0.2.x 的黑名單設定（僅供一次性遷移使用）。 */

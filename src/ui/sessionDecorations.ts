@@ -33,11 +33,11 @@ const DECORATIONS: Partial<
     color: "gitDecoration.conflictingResourceForeground",
     tooltip: "超過大小上限，備份時會略過",
   },
-  // 未選取只變暗、不給字母，和 VS Code 對 gitignore 掉的檔案一樣：
+  // 未追蹤只變暗、不給字母，和 VS Code 對 gitignore 掉的檔案一樣：
   // 它不是一種「變更」，只是不在管轄範圍內。
   unselected: {
     color: "gitDecoration.ignoredResourceForeground",
-    tooltip: "未選取：備份、變更偵測與同步都會跳過",
+    tooltip: "未追蹤：備份、變更偵測與同步都會跳過",
   },
   // synced 刻意沒有標記：乾淨的項目不出聲。
 };

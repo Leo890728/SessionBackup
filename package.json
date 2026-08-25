@@ -36,7 +36,7 @@
       },
       {
         "command": "sessionBackup.manageSelection",
-        "title": "Session Backup: 管理要備份的對話..."
+        "title": "Session Backup: 管理追蹤的對話..."
       },
       {
         "command": "sessionBackup.mapProject",
@@ -45,12 +45,12 @@
       },
       {
         "command": "sessionBackup.includeSession",
-        "title": "加入備份",
+        "title": "納入追蹤",
         "icon": "$(check)"
       },
       {
         "command": "sessionBackup.excludeSession",
-        "title": "移出備份",
+        "title": "取消追蹤",
         "icon": "$(circle-slash)"
       },
       {
@@ -290,7 +290,7 @@
             "type": "string"
           },
           "default": [],
-          "markdownDescription": "要備份的對話（白名單，建議從 Sessions 側欄的核取方塊管理）。規則分三層：`tool:claude`／`tool:codex`（整個工具，含之後新增的對話）、`claudeProject:<projects 目錄名>`（整個 Claude 專案，含之後新增的對話）、`session:<tool>:<sessionId>`（單一對話）。前綴 `-` 代表排除，例如 `-session:codex:019f44…`；判定時越具體的規則越優先（session > claudeProject > tool），所以可以勾選整個專案後再單獨排除其中一個對話。沒有任何規則涵蓋的對話不會備份、不觸發變更偵測，同步時也不會從其他電腦匯入"
+          "description": "（已淘汰）改用 sessionBackup.trackedSessions，啟動時自動搬移"
         },
         "sessionBackup.ignoredSessions": {
           "type": "array",
@@ -329,6 +329,14 @@
               "path": "~/.codex"
             }
           ]
+        },
+        "sessionBackup.trackedSessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "要追蹤（備份）的對話（白名單，建議從 Sessions 側欄的核取方塊管理）。規則分三層：`tool:claude`／`tool:codex`（整個工具，含之後新增的對話）、`claudeProject:<projects 目錄名>`（整個 Claude 專案，含之後新增的對話）、`session:<tool>:<sessionId>`（單一對話）。前綴 `-` 代表排除，例如 `-session:codex:019f44…`；判定時越具體的規則越優先（session > claudeProject > tool），所以可以勾選整個專案後再單獨排除其中一個對話。沒有任何規則涵蓋的對話不會備份、不觸發變更偵測，同步時也不會從其他電腦匯入"
         }
       }
     }

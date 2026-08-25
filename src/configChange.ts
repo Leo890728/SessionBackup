@@ -24,7 +24,7 @@ export interface ConfigReaction {
 
 export function configReaction(affects: (key: string) => boolean): ConfigReaction {
   return {
-    reloadSelection: affects("sessionBackup.selectedSessions"),
+    reloadSelection: affects("sessionBackup.trackedSessions"),
     reconfigure: RECONFIGURE_KEYS.some((key) => affects(key)),
     restartTimer: affects("sessionBackup"),
   };

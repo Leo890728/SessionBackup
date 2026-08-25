@@ -304,7 +304,7 @@ export async function collectLocalSessions(
   resolveCodexProject?: (cwd: string | undefined) => Promise<ProjectRef | undefined>
 ): Promise<LocalSession[]> {
   const sessions: LocalSession[] = [];
-  const selection = new SelectionSet(cfg.selectedSessions ?? []);
+  const selection = new SelectionSet(cfg.trackedSessions ?? []);
   if (selection.isEmpty) {
     return sessions;
   }

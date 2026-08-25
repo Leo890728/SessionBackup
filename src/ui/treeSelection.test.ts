@@ -155,8 +155,8 @@ describe("groupDescription", () => {
   });
 
   it("distinguishes a standing rule from merely having everything ticked", () => {
-    // 「已選取」代表有規則涵蓋（含之後新增的），「目前全選」只是剛好都勾到了。
-    assert.equal(groupDescription(3, 3, true, undefined), "3 個對話 · 已選取");
+    // 「已追蹤」代表有規則涵蓋（含之後新增的），「目前全選」只是剛好都勾到了。
+    assert.equal(groupDescription(3, 3, true, undefined), "3 個對話 · 已追蹤");
     assert.equal(groupDescription(3, 3, false, undefined), "3 個對話 · 目前全選");
   });
 

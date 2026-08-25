@@ -35,10 +35,10 @@ export const STATUS_DISPLAY: Record<
     label: "待備份",
     icon: "circle-outline",
     color: "charts.yellow",
-    detail: "已選取但尚未備份過，下次備份會寫入",
+    detail: "已追蹤但尚未備份過，下次備份會寫入",
   },
   unselected: {
-    label: "未選取",
+    label: "未追蹤",
     icon: "circle-slash",
     color: "disabledForeground",
     detail: "未勾選備份，備份、變更偵測與同步都會跳過",
@@ -53,7 +53,7 @@ export const STATUS_DISPLAY: Record<
 
 export function buildStatusLookup(
   manifest: MachineManifest | undefined,
-  selectedSessions: string[] | SelectionSet,
+  trackedSessions: string[] | SelectionSet,
   maxFileSizeMB: number
 ): StatusLookup {
   const byPath = new Map<string, ManifestSession>();
@@ -63,9 +63,9 @@ export function buildStatusLookup(
   return {
     byPath,
     selection:
-      selectedSessions instanceof SelectionSet
-        ? selectedSessions
-        : new SelectionSet(selectedSessions),
+      trackedSessions instanceof SelectionSet
+        ? trackedSessions
+        : new SelectionSet(trackedSessions),
     maxBytes: maxFileSizeMB * 1024 * 1024,
   };
 }

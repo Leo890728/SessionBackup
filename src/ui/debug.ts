@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import { getConfig, updateSelectedSessions } from "../config";
+import { getConfig, updateTrackedSessions } from "../config";
 import { ConflictRegistry } from "../store/conflicts";
 import { Git } from "../git/git";
 import { deleteRepository } from "../git/github/api";
@@ -189,7 +189,7 @@ interface LocalTarget extends vscode.QuickPickItem {
 
 async function deleteLocalData(deps: DebugDeps): Promise<void> {
   const cfg = getConfig();
-  const selectionCount = cfg.selectedSessions.length;
+  const selectionCount = cfg.trackedSessions.length;
   const targets: LocalTarget[] = [
     {
       id: "repo",
@@ -207,8 +207,8 @@ async function deleteLocalData(deps: DebugDeps): Promise<void> {
     },
     {
       id: "selection",
-      label: "備份選取規則",
-      description: `sessionBackup.selectedSessions（${selectionCount} 條）`,
+      label: "備份追蹤規則",
+      description: `sessionBackup.trackedSessions（${selectionCount} 條）`,
       detail: "刪除後所有對話都不會備份，要重新在 Sessions 側欄勾選",
     },
   ];
@@ -262,9 +262,9 @@ async function deleteLocalData(deps: DebugDeps): Promise<void> {
     done.push("擴充功能狀態");
   }
   if (ids.has("selection")) {
-    await updateSelectedSessions(() => []);
-    deps.out.appendLine("已清除備份選取規則");
-    done.push("備份選取規則");
+    await updateTrackedSessions(() => []);
+    deps.out.appendLine("已清除備份追蹤規則");
+    done.push("備份追蹤規則");
   }
 
   deps.tree.reloadSelection();

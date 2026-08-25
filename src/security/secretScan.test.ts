@@ -20,6 +20,27 @@ it("scans session files larger than the former 5 MB cutoff", async () => {
   }
 });
 
+it("reports the matched text with surrounding context", async () => {
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "secret-excerpt-test-"));
+  const file = path.join(root, "one.jsonl");
+  try {
+    const key = "sk-ant-" + "a".repeat(20);
+    // 前後刻意超過 120 字元的截斷範圍，確認兩側都會加上省略號。
+    // 用非英數字元當填充，否則會被 key 的字元集吃進命中範圍。
+    const pad = "。".repeat(200);
+    await fs.promises.writeFile(file, pad + key + pad + "\n");
+    const [finding] = await scanFiles(root, ["one.jsonl"]);
+    assert.equal(finding.match, key);
+    assert.ok(finding.before.startsWith("…"), finding.before.slice(0, 5));
+    assert.ok(finding.after.endsWith("…"), finding.after.slice(-5));
+    // 命中處兩側各留 120 字元，加上省略號共 121。
+    assert.equal(finding.before.length, 121);
+    assert.equal(finding.after.length, 121);
+  } finally {
+    await fs.promises.rm(root, { recursive: true, force: true });
+  }
+});
+
 describe("PATTERNS", () => {
   it("uses no global flags", () => {
     // scanFiles 逐行重複用同一個 RegExp；帶 g 的話 lastIndex 會留在上一行，

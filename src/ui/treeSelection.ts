@@ -108,7 +108,7 @@ export function groupDescription(
     return `${count} · ${partial}`;
   }
   if (selected) {
-    return `${count} · 已選取`;
+    return `${count} · 已追蹤`;
   }
   return total > 0 && chosen === total ? `${count} · 目前全選` : count;
 }
@@ -165,4 +165,4 @@ export function flattenSessions(nodes: TreeNode[]): SessionInfo[] {
   return out;
 }
 
-export const PARTIAL_TIP = "部分選取：底下的對話只勾了一部分。\n\n";
+export const PARTIAL_TIP = "部分追蹤：底下的對話只勾了一部分。\n\n";

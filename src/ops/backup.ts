@@ -1,10 +1,19 @@
 import * as vscode from "vscode";
-import { getConfig, updateSelectedSessions } from "../config";
+import { getConfig, updateTrackedSessions } from "../config";
 import { Git } from "../git/git";
 import { getSessionToken, tokenHeader } from "../git/github/auth";
 import { ProjectMappingRegistry } from "../store/projectMapping";
-import { applySessionRules } from "../store/selection";
-import { scanSessionsForSecrets, sessionDisplayName } from "../security/sessionSecretScan";
+import { applySessionRules, SelectionTarget } from "../store/selection";
+import {
+  scanSessionsForSecrets,
+  SessionSecretMatch,
+  sessionDisplayName,
+} from "../security/sessionSecretScan";
+import {
+  reviewSessionSecrets,
+  SecretDecision,
+  SecretReview,
+} from "../ui/secretReviewView";
 import {
   collectLocalSessions,
   isRevisionStored,
@@ -31,6 +40,8 @@ const AUTO_SECRET_PROMPT_TIMEOUT_MS = 5 * 60_000;
 let current: Promise<BackupOutcome> | undefined;
 /** 正在等待回應、而且可以被放掉的機密確認通知（只有自動備份的非強制通知會有）。 */
 let pendingSecretPrompt: { dismiss: () => void } | undefined;
+/** 開著的逐一確認面板（只有手動備份會有）。面板不是 modal，使用者可以晾著再按一次備份。 */
+let pendingSecretReview: SecretReview | undefined;
 
 export async function runBackup(
   out: vscode.OutputChannel,
@@ -38,6 +49,16 @@ export async function runBackup(
   projects?: ProjectMappingRegistry
 ): Promise<BackupOutcome> {
   while (current) {
+    if (pendingSecretReview) {
+      // 逐一確認的面板不會擋住 VS Code，所以使用者很容易忘了它還開著就再按一次備份。
+      // 再開一個面板只會有兩份互相打架的決定，直接把原本那個帶到前景。
+      pendingSecretReview.reveal();
+      return {
+        committed: false,
+        pushed: false,
+        message: "上一次備份還在等待疑似金鑰的確認（已切換到該視窗）",
+      };
+    }
     // 使用者沒理自動備份的機密確認通知，卻自己按了備份：手動這次才是他現在的意圖，
     // 先放掉卡住的那次再接手，否則在通知逾時之前手動備份都只會被擋掉。
     if (kind !== "manual" || !pendingSecretPrompt) {
@@ -64,24 +85,25 @@ export async function runBackup(
   }
 }
 
+function toolLabel(tool: string): string {
+  return tool === "claude" ? "Claude" : "Codex";
+}
+
 /**
- * 機密確認的提問。手動備份用強制回應的對話框（一定會有答案）；
- * 自動備份用右下角通知，除了使用者的選擇之外，還可能被逾時或後續的手動備份放掉，
+ * 自動備份的機密確認：右下角通知，一次對全部命中做同一個決定。
+ * 背景備份不該搶走焦點，所以不開逐一確認的面板。
+ * 除了使用者的選擇之外，還可能被逾時或後續的手動備份放掉，
  * 兩種情況都當成「沒有答案」，也就是取消這次備份。
  */
 async function askSecretDecision(
   out: vscode.OutputChannel,
-  modal: boolean,
   message: string,
   detail: string,
   items: readonly string[]
 ): Promise<string | undefined> {
   const prompt = Promise.resolve(
-    vscode.window.showWarningMessage(message, { modal, detail }, ...items)
+    vscode.window.showWarningMessage(message, { modal: false, detail }, ...items)
   );
-  if (modal) {
-    return prompt;
-  }
   return new Promise<string | undefined>((resolve) => {
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
@@ -124,18 +146,73 @@ async function askSecretDecision(
   });
 }
 
+/** 自動備份：一則通知、一個決定，套用到全部命中的 session。 */
+async function autoSecretDecisions(
+  out: vscode.OutputChannel,
+  matches: SessionSecretMatch[],
+  detail: string
+): Promise<Map<string, SecretDecision> | undefined> {
+  const skipLabel =
+    matches.length === 1 ? "跳過此次" : `跳過此次（${matches.length} 個）`;
+  const deselectLabel =
+    matches.length === 1
+      ? "取消追蹤此 session"
+      : `取消追蹤這 ${matches.length} 個 sessions`;
+  // 這裡的通知沒有 VS Code 自動附加的取消鈕（那是 modal 才有），
+  // 所以「取消此次備份」要自己列出來；效果與直接關掉通知、逾時完全相同。
+  const pick = await askSecretDecision(
+    out,
+    `Session Backup: 在 ${matches.length} 個 session 偵測到疑似金鑰/憑證`,
+    detail,
+    [skipLabel, deselectLabel, "仍要全部備份", "取消此次備份"]
+  );
+  const decision: SecretDecision | undefined =
+    pick === skipLabel
+      ? "skip"
+      : pick === deselectLabel
+        ? "deselect"
+        : pick === "仍要全部備份"
+          ? "backup"
+          : undefined;
+  if (!decision) {
+    return undefined;
+  }
+  return new Map(matches.map((match) => [match.session.file, decision]));
+}
+
+/** 手動備份：逐一確認的面板，可以個別決定，也可以勾「後續都這樣處理」。 */
+async function manualSecretDecisions(
+  matches: SessionSecretMatch[]
+): Promise<Map<string, SecretDecision> | undefined> {
+  const review = reviewSessionSecrets(
+    matches.map(({ session, findings, displayName }) => ({
+      key: session.file,
+      toolLabel: toolLabel(session.tool),
+      displayName,
+      fileName: session.file,
+      findings,
+    }))
+  );
+  pendingSecretReview = review;
+  try {
+    return await review.decisions;
+  } finally {
+    pendingSecretReview = undefined;
+  }
+}
+
 async function doBackup(
   out: vscode.OutputChannel,
   kind: BackupKind,
   projects?: ProjectMappingRegistry
 ): Promise<BackupOutcome> {
   const cfg = getConfig();
-  if (!cfg.selectedSessions.length) {
+  if (!cfg.trackedSessions.length) {
     // 白名單是空的：不動 manifest，避免把先前備份過的內容從索引中抹掉。
     return {
       committed: false,
       pushed: false,
-      message: "尚未選取任何要備份的對話（在 Sessions 側欄勾選）",
+      message: "尚未追蹤任何對話（在 Sessions 側欄勾選）",
     };
   }
   const git = new Git(cfg.repoPath, out);
@@ -161,7 +238,7 @@ async function doBackup(
     return {
       committed: false,
       pushed: false,
-      message: "選取的對話都找不到對應檔案，沒有可備份的內容",
+      message: "追蹤中的對話都找不到對應檔案，沒有可備份的內容",
     };
   }
   let skippedSecretCount = 0;
@@ -173,61 +250,58 @@ async function doBackup(
     );
     const secretMatches = await scanSessionsForSecrets(pending);
     if (secretMatches.length) {
-      const detail = secretMatches
-        .slice(0, 10)
-        .map(
-          ({ session, findings, displayName }) =>
-            `${session.tool === "claude" ? "Claude" : "Codex"}「${displayName}」：` +
-            findings.map((finding) => `${finding.kind}（第 ${finding.line} 行）`).join("、")
-        )
-        .join("\n");
-      const skipLabel =
-        secretMatches.length === 1
-          ? "跳過此次"
-          : `跳過此次（${secretMatches.length} 個）`;
-      const deselectLabel =
-        secretMatches.length === 1
-          ? "取消選取此 session"
-          : `取消選取這 ${secretMatches.length} 個 sessions`;
-      out.appendLine("含疑似機密的 sessions：\n" + detail);
-      // 備份庫沒有刪除機制，金鑰一旦推上去就等於外流，所以其餘選項都是「先不要上傳」；
-      // 「仍要全部備份」永遠留著，誤判時不該逼使用者去關掉整個掃描。
-      const pick = await askSecretDecision(
-        out,
-        kind === "manual",
-        `Session Backup: 在 ${secretMatches.length} 個 session 偵測到疑似金鑰/憑證`,
-        detail,
-        [skipLabel, deselectLabel, "仍要全部備份", "取消此次備份"]
-      );
-      if (pick === skipLabel) {
-        const skippedFiles = new Set(secretMatches.map((match) => match.session.file));
-        sessions = sessions.filter((session) => !skippedFiles.has(session.file));
-        skippedSecretCount = secretMatches.length;
-        out.appendLine(`已跳過 ${skippedSecretCount} 個含疑似機密的 session`);
-      } else if (pick === deselectLabel) {
-        const targets = secretMatches.map((match) => ({
-          tool: match.session.tool,
-          id: match.session.id,
-          claudeProjectDir: match.session.claudeProjectDir,
-        }));
-        await updateSelectedSessions((current) =>
-          applySessionRules(current, targets, false)
-        );
-        const keys = new Set(targets.map((t) => `${t.tool}:${t.id}`));
-        sessions = sessions.filter(
-          (session) => !keys.has(`${session.tool}:${session.id}`)
-        );
-        skippedSecretCount = secretMatches.length;
-        out.appendLine(
-          `已取消選取 ${keys.size} 個 session（sessionBackup.selectedSessions），` +
-            "之後的備份、變更偵測與同步都會跳過"
-        );
-      } else if (pick !== "仍要全部備份") {
+      const line = ({ session, findings, displayName }: SessionSecretMatch) =>
+        `${toolLabel(session.tool)}「${displayName}」：` +
+        findings.map((finding) => `${finding.kind}（第 ${finding.line} 行）`).join("、");
+      out.appendLine("含疑似機密的 sessions：\n" + secretMatches.map(line).join("\n"));
+      // 備份庫沒有刪除機制，金鑰一旦推上去就等於外流，所以每個選項的預設方向都是「先不要上傳」；
+      // 「仍要備份」永遠留著，誤判時不該逼使用者去關掉整個掃描。
+      const decisions =
+        kind === "manual"
+          ? await manualSecretDecisions(secretMatches)
+          : await autoSecretDecisions(
+              out,
+              secretMatches,
+              // 通知的內文有高度上限，列太多只會被截掉。
+              secretMatches.slice(0, 10).map(line).join("\n")
+            );
+      if (!decisions) {
         return {
           committed: false,
           pushed: false,
           message: "偵測到疑似機密，已取消備份（詳見記錄）",
         };
+      }
+      const skippedFiles = new Set<string>();
+      const deselected: SelectionTarget[] = [];
+      for (const match of secretMatches) {
+        // 沒有明確答案的一律當成跳過：預設放行等於預設外流。
+        const decision = decisions.get(match.session.file) ?? "skip";
+        if (decision === "backup") {
+          continue;
+        }
+        skippedFiles.add(match.session.file);
+        if (decision === "deselect") {
+          deselected.push({
+            tool: match.session.tool,
+            id: match.session.id,
+            claudeProjectDir: match.session.claudeProjectDir,
+          });
+        }
+      }
+      if (deselected.length) {
+        await updateTrackedSessions((current) =>
+          applySessionRules(current, deselected, false)
+        );
+        out.appendLine(
+          `已取消追蹤 ${deselected.length} 個 session（sessionBackup.trackedSessions），` +
+            "之後的備份、變更偵測與同步都會跳過"
+        );
+      }
+      if (skippedFiles.size) {
+        sessions = sessions.filter((session) => !skippedFiles.has(session.file));
+        skippedSecretCount = skippedFiles.size;
+        out.appendLine(`已跳過 ${skippedSecretCount} 個含疑似機密的 session`);
       }
     }
   }

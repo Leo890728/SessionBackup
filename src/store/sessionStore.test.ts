@@ -254,7 +254,7 @@ describe("Claude project metadata", () => {
           backupOnStartup: false,
           maxFileSizeMB: 95,
           secretScan: false,
-          selectedSessions: ["tool:claude"],
+          trackedSessions: ["tool:claude"],
         },
         async (cwd, bucket) => {
           assert.equal(cwd, "C:\\Users\\a\\Work\\App");
@@ -315,7 +315,7 @@ describe("session selection", () => {
         maxFileSizeMB: 95,
         secretScan: false,
         // 整個 Claude 專案，但排除其中一個對話；Codex 則只選一個 thread。
-        selectedSessions: [
+        trackedSessions: [
           "claudeProject:C--proj",
           "-session:claude:secret",
           "session:codex:thread-1",
@@ -331,7 +331,7 @@ describe("session selection", () => {
         "C--proj"
       );
 
-      const nothingSelected = await collectLocalSessions({ ...cfg, selectedSessions: [] });
+      const nothingSelected = await collectLocalSessions({ ...cfg, trackedSessions: [] });
       assert.deepEqual(nothingSelected, []);
     } finally {
       await fs.promises.rm(root, { recursive: true, force: true });
@@ -360,7 +360,7 @@ describe("備份端的 codex session_meta 判讀", () => {
         backupOnStartup: false,
         maxFileSizeMB: 95,
         secretScan: false,
-        selectedSessions: ["tool:codex"],
+        trackedSessions: ["tool:codex"],
       });
       return sessions.map((s) => s.id);
     } finally {
@@ -422,7 +422,7 @@ describe("備份端的 codex session_meta 判讀", () => {
         backupOnStartup: false,
         maxFileSizeMB: 95,
         secretScan: false,
-        selectedSessions: ["tool:codex"],
+        trackedSessions: ["tool:codex"],
       });
 
       const byOwnId = new Map(sessions.map((s) => [s.ownId, s]));

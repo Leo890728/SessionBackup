@@ -5,7 +5,7 @@ import { runBackup } from "./backup";
 import { upsertCodexSessionTitle } from "../agents/codexIndex";
 import { materializeCodexRevision, readCodexMetaCwd } from "../agents/codexLocalize";
 import { ConflictRecord, ConflictRegistry } from "../store/conflicts";
-import { getConfig, updateSelectedSessions } from "../config";
+import { getConfig, updateTrackedSessions } from "../config";
 import { ProjectMappingRegistry } from "../store/projectMapping";
 import { applySessionRules, SelectionSet, SelectionTarget } from "../store/selection";
 import { sessionDisplayName } from "../security/sessionSecretScan";
@@ -73,7 +73,7 @@ export async function runSync(
   const localByFile = new Map(
     localSessions.map((session) => [fileKey(session.tool, session.relativePath), session])
   );
-  const selection = new SelectionSet(cfg.selectedSessions);
+  const selection = new SelectionSet(cfg.trackedSessions);
   const candidates = newestRemoteFiles(manifests);
   const resolutions = await readResolutions(cfg.repoPath, machineId);
   const conflictRecords: ConflictRecord[] = [];
@@ -247,7 +247,7 @@ export async function runSync(
   await conflicts.replaceAll(conflictRecords);
   if (adopted.length) {
     // 必須在下面補跑的備份之前寫回，匯入的對話才會進入本機 manifest。
-    await updateSelectedSessions((current) => applySessionRules(current, adopted, true));
+    await updateTrackedSessions((current) => applySessionRules(current, adopted, true));
   }
   if (summary.added || summary.updated) {
     await runBackup(out, interactive ? "manual" : "auto", projects);

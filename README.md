@@ -74,7 +74,7 @@ machines/<machine-id>/manifest.json           這台電腦備份了哪些 revisi
 machines/<machine-id>/resolutions.json        衝突處理決定
 ```
 
-資料流：掃描來源 → 依選取白名單過濾 → 內容 SHA-256 → 寫入 store → 金鑰掃描 →
+資料流：掃描來源 → 依追蹤白名單過濾 → 內容 SHA-256 → 寫入 store → 金鑰掃描 →
 commit → push；同步則是 pull 後比對 manifest，以 no-delete 規則合併
 （其他電腦不存在的 session 永遠不刪）。
 
@@ -110,7 +110,7 @@ code --install-extension session-backup-0.5.2.vsix
    別人分享的 repo）選「手動輸入 remote URL」，認證沿用 git 既有憑證。
 2. `sessionBackup.machineId` 留空即可，會自動用「主機名稱 + VS Code 安裝識別碼短雜湊」，
    同名主機也不會撞。此設定為 machine-scoped，不會被 Settings Sync 帶到其他電腦。
-3. 在活動列的 **Session Backup → Sessions** 勾選要備份的對話
+3. 在活動列的 **Session Backup → Sessions** 勾選要追蹤的對話
    （可勾單一對話、整個專案或整個工具）。
 4. 執行 **Session Backup: 立即備份**。
 5. 在另一台電腦重複 1～2，然後執行 **Session Backup: 同步並合併其他電腦紀錄...**。
@@ -129,6 +129,7 @@ src/
   projectMapping.ts                projectId ↔ 本機資料夾對應（存 global storage）
   codexMeta/Index/Localize.ts      Codex rollout schema、標題索引、cwd 本地化
   secretScan.ts  sessionSecretScan.ts  備份前的金鑰偵測
+  secretReviewView.ts              金鑰命中的逐一確認面板
   sessionTree.ts  repositoryTree.ts  兩個側欄 TreeDataProvider
   sessionPreview*.ts  markdownHtml.ts  highlight.ts   預覽 webview
   conflicts.ts  conflictView.ts    衝突紀錄與左右比較視窗
@@ -151,9 +152,9 @@ out/                               tsc 輸出（不進版控）
 
 憑證、設定、skills、plugins、SQLite、cache、sandbox 與暫存檔不會進入 store。
 
-### 選擇要備份的對話
+### 選擇要追蹤的對話
 
-在 **Sessions** 側欄用核取方塊勾選，結果存在 `sessionBackup.selectedSessions`：
+在 **Sessions** 側欄用核取方塊勾選，結果存在 `sessionBackup.trackedSessions`：
 
 | 勾選位置 | 規則 | 涵蓋範圍 |
 | --- | --- | --- |
@@ -170,11 +171,11 @@ out/                               tsc 輸出（不進版控）
 - 沒有任何規則涵蓋的對話完全不參與備份流程：不上傳、不列入「有變動的 sessions」、
   同步時也不會被其他電腦的版本覆寫。
 - 取消勾選只影響之後的備份，**已上傳到 GitHub 的舊備份不會被刪除**。
-- 從其他電腦同步匯入的對話會自動納入選取 — 它本來就在備份裡，
+- 從其他電腦同步匯入的對話會自動納入追蹤 — 它本來就在備份裡，
   否則匯入後反而不會再被備份。
-- 也可用 **Session Backup: 管理要備份的對話...** 檢視並刪除選取規則。
+- 也可用 **Session Backup: 管理追蹤的對話...** 檢視並刪除追蹤規則。
 
-> 從 0.2.x 升級：首次啟動會把本機 manifest 中**已經備份過**的對話設為選取，
+> 從 0.2.x 升級：首次啟動會把本機 manifest 中**已經備份過**的對話設為追蹤，
 > 既有備份不會突然停止更新；之後新增的對話則要自己勾選。
 > 舊的 `sessionBackup.ignoredSessions` 會自動移除。
 
@@ -256,12 +257,12 @@ B 電腦在 `D:\` 時，這個欄位視為**機器本地屬性**處理：
   - **U**（綠）**待備份** — 已勾選但備份庫裡還沒有
   - **M**（黃）**未同步** — 備份後有新內容，下次備份會更新
   - **!**（紅）**跳過（過大）** — 超過 `maxFileSizeMB` 上限
-  - **整列變暗** — 未選取，備份與同步都會跳過；整個專案／AI 都沒勾選時該層也會變暗
+  - **整列變暗** — 未追蹤，備份與同步都會跳過；整個專案／AI 都沒勾選時該層也會變暗
   - 已同步不顯示任何標記
 - 點擊 session 可預覽 Markdown；可從預覽頁直接回到 Claude Code 或 Codex 的原生對話視窗。
 - 預覽開啟時停在最新訊息；下次備份會寫入的對話會有一條橫桿標出「已備份到哪裡」，
   位置取自已備份 revision 與現況的共同前綴，捲過之後會黏在標題列下方。
-- 右鍵可匯出 Markdown、開啟原始 JSONL、加入或移出備份。
+- 右鍵可匯出 Markdown、開啟原始 JSONL、納入或取消追蹤。
 
 側邊欄頂端的 **GitHub Backup** 會依狀態顯示操作：
 
@@ -278,11 +279,14 @@ B 電腦在 `D:\` 時，這個欄位視為**機器本地屬性**處理：
 - Session 本身可能包含提示詞、原始碼、工具輸出、路徑或金鑰，
   **遠端必須使用私人儲存庫**。
 - commit 前會掃描常見 Anthropic、OpenAI、GitHub、AWS、Slack、Google 金鑰與私鑰標頭。
-- 掃描命中時可選「跳過此次」或「取消選取」。取消選取會寫入
-  `sessionBackup.selectedSessions` 的排除規則：該 session 之後不備份、不觸發變更偵測，
+- 手動備份命中時會開確認面板，逐一詢問每個 session（可勾「後續都這樣處理」），
+  並顯示命中處前後的原文以判斷誤判（命中處以標記色標出，照實顯示）。
+- 每個 session 可選「跳過此次」「取消追蹤」「仍要備份」。取消追蹤會寫入
+  `sessionBackup.trackedSessions` 的排除規則：該 session 之後不備份、不觸發變更偵測，
   多機同步時也不會從其他電腦匯入回本機；已上傳的舊備份不會被刪除。
 - 掃描只攔截，不會改寫本機對話紀錄；金鑰進過紀錄就該撤銷換發，而不是從檔案裡擦掉。
-- 自動備份的提示是右下角通知，五分鐘沒回應就當作取消這次備份，下次再問；
+- 自動備份不開面板搶焦點，提示是右下角通知，對全部命中做同一個決定，
+  五分鐘沒回應就當作取消這次備份，下次再問；
   中途手動按備份會直接接手，不必等它逾時。
 - GitHub token 只透過 `http.extraHeader` 傳給 Git，不寫入 `.git/config`。
 - 單檔超過 `sessionBackup.maxFileSizeMB` 時略過，預設 95 MB。
@@ -297,7 +301,7 @@ B 電腦在 `D:\` 時，這個欄位視為**機器本地屬性**處理：
 | `Session Backup: 備份至遠端儲存庫` | 建立第一份安全掃描過的備份並 push |
 | `Session Backup: 同步並合併其他電腦紀錄...` | 備份本機、取得遠端並以 no-delete 規則合併 |
 | `Session Backup: 管理 Claude 專案對應...` | 重新定位、開啟或移除本機 projectId 對應 |
-| `Session Backup: 管理要備份的對話...` | 檢視選取規則，勾選即可刪除 |
+| `Session Backup: 管理追蹤的對話...` | 檢視追蹤規則，勾選即可刪除 |
 | `Session Backup: 重新登入 GitHub` | 換用另一個 GitHub 帳號 |
 | `Session Backup: 開啟本地備份儲存庫資料夾` | 開啟 `~/.session-backup` |
 | `Session Backup: 顯示記錄` | 顯示輸出面板 |
@@ -317,11 +321,12 @@ B 電腦在 `D:\` 時，這個欄位視為**機器本地屬性**處理：
 | `sessionBackup.backupOnStartup` | `false` | VS Code 啟動時自動備份一次 |
 | `sessionBackup.maxFileSizeMB` | `95` | 單檔大小上限，超過略過（GitHub 硬限制 100 MB） |
 | `sessionBackup.secretScan` | `true` | commit 前掃描疑似 API 金鑰／憑證 |
-| `sessionBackup.selectedSessions` | `[]` | 備份白名單規則（建議用側欄核取方塊管理） |
+| `sessionBackup.trackedSessions` | `[]` | 追蹤白名單規則（建議用側欄核取方塊管理） |
 | `sessionBackup.sources` | claude／codex | 來源根目錄，只讀 `projects`、`sessions`、`archived_sessions` 下的 JSONL |
 | `sessionBackup.debugCommands` | `false` | 在命令面板顯示除錯／重置命令 |
 
-`sessionBackup.ignoredSessions` 已由 `selectedSessions` 取代，啟動時自動轉換並移除。
+`sessionBackup.ignoredSessions` 與 `sessionBackup.selectedSessions` 都已由
+`trackedSessions` 取代，啟動時自動轉換並移除。
 
 ## 開發流程
 

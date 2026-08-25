@@ -1,9 +1,10 @@
 import type { Tool } from "../agents/types";
 
 /**
- * 備份選取是「白名單」：沒有任何規則涵蓋的 session 不會被備份。
+ * 追蹤是「白名單」：沒有任何規則涵蓋的 session 完全不進備份體系
+ * —— 不備份、不觸發變更偵測，同步時也不會從其他電腦匯入。
  *
- * 規則以字串 key 存在 sessionBackup.selectedSessions，分三層：
+ * 規則以字串 key 存在 sessionBackup.trackedSessions，分三層：
  *   tool:<tool>                 整個工具（之後新增的 session 也自動涵蓋）
  *   claudeProject:<projectDir>  單一 Claude 專案 bucket（同上）
  *   session:<tool>:<id>         單一 session（Codex 接續 thread 的多個 rollout 檔共用同一個 id）
@@ -15,12 +16,12 @@ import type { Tool } from "../agents/types";
 export type SelectionLevel = "session" | "claudeProject" | "tool";
 
 /**
- * 「部分選取」提示。VS Code 的 TreeItem checkbox 只有 Checked / Unchecked
+ * 「部分追蹤」提示。VS Code 的 TreeItem checkbox 只有 Checked / Unchecked
  * （TreeItemCheckboxState 沒有 indeterminate，樹狀圖也不能套 CSS），
  * 所以子項目勾一半時只能寫在 description 與 tooltip 上，勾選框本身維持兩態。
  */
 export function partialHint(selected: number, total: number): string | undefined {
-  return selected > 0 && selected < total ? `部分選取 ${selected}/${total}` : undefined;
+  return selected > 0 && selected < total ? `部分追蹤 ${selected}/${total}` : undefined;
 }
 
 const LEVEL_ORDER: SelectionLevel[] = ["session", "claudeProject", "tool"];
@@ -53,7 +54,7 @@ export function excludeKey(key: string): string {
 export function describeSelectionKey(key: string): string {
   const excluded = key.startsWith("-");
   const body = excluded ? key.slice(1) : key;
-  const prefix = excluded ? "排除" : "備份";
+  const prefix = excluded ? "不追蹤" : "追蹤";
   if (body.startsWith("tool:")) {
     const tool = body.slice("tool:".length);
     return `${prefix}：整個 ${tool === "claude" ? "Claude Code" : "Codex"}`;
@@ -145,7 +146,7 @@ export class SelectionSet {
   }
 
   /**
-   * 這個工具底下是否有比 tool 更細的規則。樹狀圖用來判斷「部分選取」：
+   * 這個工具底下是否有比 tool 更細的規則。樹狀圖用來判斷「部分追蹤」：
    * 勾了整個工具時看有沒有排除規則，沒勾時看有沒有個別加選的規則。
    */
   hasNarrowerRule(tool: Tool, excluded: boolean): boolean {
@@ -194,7 +195,7 @@ export function applyRule(
   return [...next].sort();
 }
 
-/** 套用一批 session 層級的變更（同步匯入、機密掃描批次取消選取用）。 */
+/** 套用一批 session 層級的變更（同步匯入、機密掃描批次取消追蹤用）。 */
 export function applySessionRules(
   current: readonly string[],
   targets: readonly SelectionTarget[],

@@ -6,6 +6,33 @@ export interface SecretFinding {
   rel: string;
   kind: string;
   line: number;
+  /** 命中的字串本身；顯示給使用者時預設遮蔽。 */
+  match: string;
+  /** 命中處之前的內容（往前最多 CONTEXT_CHARS 字元）。 */
+  before: string;
+  /** 命中處之後的內容（往後最多 CONTEXT_CHARS 字元）。 */
+  after: string;
+}
+
+/**
+ * 命中處前後各保留多少字元。
+ * session 檔是 JSONL，一行就是一整則訊息（可能好幾萬字），
+ * 整行丟給使用者看沒有意義，只截命中處附近足夠判斷誤判的範圍。
+ */
+const CONTEXT_CHARS = 120;
+
+function excerpt(
+  text: string,
+  index: number,
+  match: string
+): Pick<SecretFinding, "match" | "before" | "after"> {
+  const start = Math.max(0, index - CONTEXT_CHARS);
+  const end = Math.min(text.length, index + match.length + CONTEXT_CHARS);
+  return {
+    match,
+    before: (start > 0 ? "…" : "") + text.slice(start, index),
+    after: text.slice(index + match.length, end) + (end < text.length ? "…" : ""),
+  };
 }
 
 export interface SecretPattern {
@@ -86,8 +113,14 @@ export async function scanFiles(
       for await (const text of lines) {
         line++;
         for (const p of PATTERNS) {
-          if (!found.has(p.kind) && p.re.test(text)) {
-            findings.push({ rel, kind: p.kind, line });
+          if (found.has(p.kind)) {
+            continue;
+          }
+          // 用 exec 而不是 test：要拿到命中的位置與內容才能給出可判讀的片段。
+          // PATTERNS 保證沒有 g 旗標，所以 lastIndex 不會殘留。
+          const m = p.re.exec(text);
+          if (m) {
+            findings.push({ rel, kind: p.kind, line, ...excerpt(text, m.index, m[0]) });
             found.add(p.kind);
           }
         }

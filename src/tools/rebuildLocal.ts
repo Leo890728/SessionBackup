@@ -30,7 +30,7 @@ async function main(): Promise<void> {
     maxFileSizeMB: 95,
     secretScan: true,
     // CLI 一次性重建：不走側欄勾選，直接選取兩個工具的全部內容。
-    selectedSessions: ["tool:claude", "tool:codex"],
+    trackedSessions: ["tool:claude", "tool:codex"],
   };
   const projects = new Map<string, ProjectRef | undefined>();
   const sessions = await collectLocalSessions(cfg, async (cwd, bucket) => {
