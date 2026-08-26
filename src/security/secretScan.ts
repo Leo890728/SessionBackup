@@ -96,13 +96,25 @@ export const PATTERNS: SecretPattern[] = [
   },
 ];
 
+export interface ScanTarget {
+  /** 相對 root 的路徑，也就是 finding.rel。 */
+  rel: string;
+  /**
+   * 跳過開頭這幾行。session 檔是 append-only 的，已經備份出去的前綴再掃一次
+   * 只會為了同一段舊內容重複發問；行號仍以整份檔案計，指得回原檔。
+   */
+  skipLines?: number;
+}
+
 /** 掃描指定相對路徑清單（root 之下）的文字檔，回報疑似金鑰。 */
 export async function scanFiles(
   root: string,
-  rels: string[]
+  targets: readonly (string | ScanTarget)[]
 ): Promise<SecretFinding[]> {
   const findings: SecretFinding[] = [];
-  for (const rel of rels) {
+  for (const target of targets) {
+    const { rel, skipLines = 0 } =
+      typeof target === "string" ? { rel: target, skipLines: 0 } : target;
     const full = path.join(root, rel);
     let input: fs.ReadStream | undefined;
     try {
@@ -112,6 +124,9 @@ export async function scanFiles(
       let line = 0;
       for await (const text of lines) {
         line++;
+        if (line <= skipLines) {
+          continue;
+        }
         for (const p of PATTERNS) {
           if (found.has(p.kind)) {
             continue;

@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import {
   classifyJsonlText,
   collectLocalSessions,
+  pendingSessions,
   resolveLocalTarget,
   safeSegment,
   sessionContentHash,
@@ -59,6 +60,75 @@ describe("store path safety", () => {
 
   it("rejects a target outside the tool root", () => {
     assert.equal(resolveLocalTarget("C:\\sessions", "../auth.json"), undefined);
+  });
+});
+
+describe("pendingSessions", () => {
+  const localSession = async (file: string) => ({
+    tool: "claude" as const,
+    id: "session-1",
+    file,
+    relativePath: "projects/test/session-1.jsonl",
+    mtimeMs: 1,
+    size: (await fs.promises.stat(file)).size,
+    hash: await sha256File(file),
+    contentHash: await sessionContentHash(file),
+  });
+
+  it("skips a conversation that only gained Claude's connection bookkeeping", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "session-pending-"));
+    const source = path.join(root, "source.jsonl");
+    await fs.promises.writeFile(source, line("1", "hello") + "\n");
+    try {
+      await storeSessions(root, "machine-a", [await localSession(source)], 1024 * 1024);
+      await fs.promises.appendFile(
+        source,
+        JSON.stringify({ type: "bridge-session", sessionId: "session-1" }) + "\n"
+      );
+
+      assert.deepEqual(
+        await pendingSessions(root, "machine-a", [await localSession(source)]),
+        []
+      );
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports only the lines appended since the stored revision", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "session-pending-"));
+    const source = path.join(root, "source.jsonl");
+    await fs.promises.writeFile(source, line("1", "hello") + "\n" + line("2", "hi") + "\n");
+    try {
+      await storeSessions(root, "machine-a", [await localSession(source)], 1024 * 1024);
+      await fs.promises.appendFile(source, line("3", "more") + "\n");
+
+      const pending = await pendingSessions(root, "machine-a", [await localSession(source)]);
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0].backedUpLines, 2);
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rescans everything when the file is no longer a continuation", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "session-pending-"));
+    const source = path.join(root, "source.jsonl");
+    await fs.promises.writeFile(source, line("1", "hello") + "\n");
+    try {
+      await storeSessions(root, "machine-a", [await localSession(source)], 1024 * 1024);
+      // 內容被改寫（不是單純往後接）：已備份的 revision 不再是這份檔案的前綴。
+      await fs.promises.writeFile(
+        source,
+        line("1", "rewritten") + "\n" + line("2", "next") + "\n"
+      );
+
+      const pending = await pendingSessions(root, "machine-a", [await localSession(source)]);
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0].backedUpLines, 0);
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
   });
 });
 

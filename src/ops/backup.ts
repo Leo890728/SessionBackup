@@ -16,8 +16,8 @@ import {
 } from "../ui/secretReviewView";
 import {
   collectLocalSessions,
-  isRevisionStored,
   machineIdFromConfig,
+  pendingSessions,
   storeSessions,
 } from "../store/sessionStore";
 
@@ -227,7 +227,7 @@ async function doBackup(
   }
 
   const maxBytes = cfg.maxFileSizeMB * 1024 * 1024;
-  let sessions = await collectLocalSessions(
+  const sessions = await collectLocalSessions(
     cfg,
     projects
       ? (cwd, projectDir) => projects.identifyLocalProject(cwd, projectDir)
@@ -241,14 +241,23 @@ async function doBackup(
       message: "追蹤中的對話都找不到對應檔案，沒有可備份的內容",
     };
   }
-  let skippedSecretCount = 0;
+  const machineId = machineIdFromConfig(cfg);
+  /** 掃到疑似金鑰、這次不上傳新內容的 session 檔案。 */
+  let heldForSecrets = new Set<string>();
   if (cfg.secretScan) {
-    // 只掃這次會新寫入 store 的內容；已存在的 revision 不會再上傳，重掃只是噪音。
-    const pending = sessions.filter(
-      (session) =>
-        session.size <= maxBytes && !isRevisionStored(cfg.repoPath, session)
+    // 只掃這次真的會新寫入 store 的內容：沒有變動的對話不會再上傳，
+    // 已經備份出去的那段前綴也早就在備份庫裡了，為它們發問只是把使用者訓練成一路按過去。
+    const pending = await pendingSessions(
+      cfg.repoPath,
+      machineId,
+      sessions.filter((session) => session.size <= maxBytes)
     );
-    const secretMatches = await scanSessionsForSecrets(pending);
+    const secretMatches = await scanSessionsForSecrets(
+      pending.map(({ session, backedUpLines }) => ({
+        session,
+        skipLines: backedUpLines,
+      }))
+    );
     if (secretMatches.length) {
       const line = ({ session, findings, displayName }: SessionSecretMatch) =>
         `${toolLabel(session.tool)}「${displayName}」：` +
@@ -299,14 +308,19 @@ async function doBackup(
         );
       }
       if (skippedFiles.size) {
-        sessions = sessions.filter((session) => !skippedFiles.has(session.file));
-        skippedSecretCount = skippedFiles.size;
-        out.appendLine(`已跳過 ${skippedSecretCount} 個含疑似機密的 session`);
+        heldForSecrets = skippedFiles;
+        out.appendLine(`已跳過 ${skippedFiles.size} 個含疑似機密的 session`);
       }
     }
   }
-  const machineId = machineIdFromConfig(cfg);
-  const stored = await storeSessions(cfg.repoPath, machineId, sessions, maxBytes);
+  const skippedSecretCount = heldForSecrets.size;
+  const stored = await storeSessions(
+    cfg.repoPath,
+    machineId,
+    sessions,
+    maxBytes,
+    heldForSecrets
+  );
   for (const session of stored.skipped) {
     out.appendLine(
       `略過「${await sessionDisplayName(session)}」` +

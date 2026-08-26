@@ -179,6 +179,90 @@ export function isRevisionStored(
   );
 }
 
+export interface PendingSession {
+  session: LocalSession;
+  /**
+   * 上一輪已經備份出去、而且確定是目前檔案前綴的行數。
+   * 只有這幾行之後的內容才是這次會新上傳的東西。
+   */
+  backedUpLines: number;
+}
+
+/**
+ * 這次備份真的會把新內容寫進 store 的 sessions（以及各自已備份到第幾行）。
+ *
+ * 判斷條件與 storeSessions 一致：內容沒變（差別只在被濾掉的本機連線紀錄）就不算，
+ * 不然光是點開一段舊對話就會被當成有新內容。金鑰掃描靠它決定要掃哪些檔案的哪一段。
+ */
+export async function pendingSessions(
+  repoPath: string,
+  machineId: string,
+  sessions: readonly LocalSession[]
+): Promise<PendingSession[]> {
+  const manifestFile = path.join(
+    repoPath,
+    ...manifestRelativePath(machineId).split("/")
+  );
+  const previous = await readManifest(manifestFile);
+  const previousByPath = new Map(
+    (previous?.sessions ?? []).map((session) => [
+      `${session.tool}:${session.relativePath}`,
+      session,
+    ])
+  );
+  const pending: PendingSession[] = [];
+  for (const session of sessions) {
+    const stored = previousByPath.get(`${session.tool}:${session.relativePath}`);
+    if (stored && (await sameConversation(repoPath, stored, session))) {
+      continue;
+    }
+    // 這份內容已經在 store 裡（例如另一台電腦先備份過同一段對話）：
+    // 再備份一次不會多送出任何東西。
+    if (isRevisionStored(repoPath, session)) {
+      continue;
+    }
+    pending.push({
+      session,
+      backedUpLines: stored ? await backedUpLineCount(session, stored) : 0,
+    });
+  }
+  return pending;
+}
+
+/**
+ * 已備份的 revision 是目前檔案的位元組前綴時，回傳它涵蓋的完整行數。
+ *
+ * 直接拿 manifest 記的大小與雜湊比對檔案開頭，對不上（對話被改寫、或 manifest
+ * 與檔案不同步）就回 0，整份重掃——寧可多問一次，也不能把沒備份過的內容當成看過了。
+ */
+async function backedUpLineCount(
+  session: LocalSession,
+  stored: ManifestSession
+): Promise<number> {
+  if (!stored.size || stored.size > session.size) {
+    return 0;
+  }
+  const digest = createHash("sha256");
+  let lines = 0;
+  let read = 0;
+  const input = fs.createReadStream(session.file, { start: 0, end: stored.size - 1 });
+  try {
+    for await (const chunk of input) {
+      const buffer = chunk as Buffer;
+      digest.update(buffer);
+      read += buffer.length;
+      for (let at = buffer.indexOf(10); at !== -1; at = buffer.indexOf(10, at + 1)) {
+        lines++;
+      }
+    }
+  } catch {
+    return 0;
+  } finally {
+    input.destroy();
+  }
+  return read === stored.size && digest.digest("hex") === stored.hash ? lines : 0;
+}
+
 export function manifestRelativePath(machineId: string): string {
   return path.posix.join("machines", safeSegment(machineId), "manifest.json");
 }
@@ -378,7 +462,13 @@ export async function storeSessions(
   repoPath: string,
   machineId: string,
   sessions: LocalSession[],
-  maxBytes: number
+  maxBytes: number,
+  /**
+   * 這次不上傳新內容、但要原封保留上一輪 manifest 紀錄的 session 檔案路徑
+   * （例如新內容掃到疑似金鑰而被跳過）。直接把它們從 sessions 拿掉的話，
+   * manifest 會連同以前備份過的那份紀錄一起消失。
+   */
+  held: ReadonlySet<string> = new Set()
 ): Promise<{
   copied: string[];
   skipped: LocalSession[];
@@ -417,6 +507,12 @@ export async function storeSessions(
       continue;
     }
     const stored = previousByPath.get(`${session.tool}:${session.relativePath}`);
+    if (held.has(session.file)) {
+      if (stored) {
+        manifestSessions.push(stored);
+      }
+      continue;
+    }
     // 檔案變了但對話沒變（Claude 開啟舊對話時補寫的連線紀錄）：沿用上一輪的 revision，
     // 不然每點開一次舊對話就會多備份一輪一模一樣的內容。
     if (stored && (await sameConversation(repoPath, stored, session))) {

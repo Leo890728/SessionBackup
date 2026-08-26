@@ -30,12 +30,39 @@ describe("scanSessionsForSecrets", () => {
       });
 
       const matches = await scanSessionsForSecrets([
-        session("safe", safeFile),
-        session("risky", riskyFile),
+        { session: session("safe", safeFile) },
+        { session: session("risky", riskyFile) },
       ]);
       assert.equal(matches.length, 1);
       assert.equal(matches[0].session.id, "risky");
       assert.equal(matches[0].findings[0].kind, "OpenAI API key");
+    } finally {
+      await fs.promises.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores secrets in the lines already backed up", async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "session-secret-"));
+    const file = path.join(dir, "old-key.jsonl");
+    try {
+      const fakeKey = "sk-" + "proj-" + "a".repeat(24);
+      await fs.promises.writeFile(
+        file,
+        JSON.stringify({ message: fakeKey }) + "\n" + '{"message":"new"}\n',
+        "utf8"
+      );
+      const session: LocalSession = {
+        tool: "codex",
+        id: "old-key",
+        file,
+        relativePath: "sessions/old-key.jsonl",
+        mtimeMs: 1,
+        size: 1,
+        hash: "h",
+      };
+
+      assert.equal((await scanSessionsForSecrets([{ session }])).length, 1);
+      assert.deepEqual(await scanSessionsForSecrets([{ session, skipLines: 1 }]), []);
     } finally {
       await fs.promises.rm(dir, { recursive: true, force: true });
     }

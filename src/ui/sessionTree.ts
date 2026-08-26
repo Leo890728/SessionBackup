@@ -371,7 +371,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         item.tooltip =
           `${s.title}\n\n` +
           (n.hasSecret
-            ? "⚠ 掃到疑似金鑰：備份時會逐一跟你確認要不要送上去。\n\n"
+            ? "⚠ 掃到疑似金鑰：備份時若還沒送出去的新內容含金鑰，會逐一跟你確認。\n\n"
             : "") +
           `狀態:${display.label} — ${display.detail}\n\n` +
           (partial ? `子 sessions ${PARTIAL_TIP}` : "") +

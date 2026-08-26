@@ -1,8 +1,17 @@
 import * as path from "path";
-import { scanFiles, SecretFinding } from "./secretScan";
+import { scanFiles, ScanTarget, SecretFinding } from "./secretScan";
 import { readClaudeMetadata } from "../agents/claude";
 import { codexSessionInfo } from "../agents/codex";
 import { LocalSession } from "../store/sessionStore";
+
+export interface SessionScanTarget {
+  session: LocalSession;
+  /**
+   * 跳過開頭這幾行（已經備份出去的內容）。session 檔是 append-only 的，
+   * 舊內容再掃一次只會為同一段東西重複發問；預設 0 代表整份掃。
+   */
+  skipLines?: number;
+}
 
 export interface SessionSecretMatch {
   session: LocalSession;
@@ -66,27 +75,27 @@ export async function filesWithSecrets(
 }
 
 export async function scanSessionsForSecrets(
-  sessions: LocalSession[]
+  targets: readonly SessionScanTarget[]
 ): Promise<SessionSecretMatch[]> {
   const groups = new Map<
     string,
-    { rels: string[]; sessions: Map<string, LocalSession> }
+    { targets: ScanTarget[]; sessions: Map<string, LocalSession> }
   >();
-  for (const session of sessions) {
+  for (const { session, skipLines } of targets) {
     const root = path.parse(session.file).root;
     const rel = path.relative(root, session.file);
     let group = groups.get(root);
     if (!group) {
-      group = { rels: [], sessions: new Map<string, LocalSession>() };
+      group = { targets: [], sessions: new Map<string, LocalSession>() };
       groups.set(root, group);
     }
-    group.rels.push(rel);
+    group.targets.push({ rel, skipLines });
     group.sessions.set(rel, session);
   }
 
   const matches = new Map<LocalSession, SecretFinding[]>();
   for (const [root, group] of groups) {
-    const findings = await scanFiles(root, group.rels);
+    const findings = await scanFiles(root, group.targets);
     for (const finding of findings) {
       const session = group.sessions.get(finding.rel);
       if (!session) {
@@ -98,7 +107,7 @@ export async function scanSessionsForSecrets(
     }
   }
   const out: SessionSecretMatch[] = [];
-  for (const session of sessions) {
+  for (const { session } of targets) {
     const findings = matches.get(session);
     if (findings) {
       out.push({
