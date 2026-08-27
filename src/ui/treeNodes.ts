@@ -1,6 +1,6 @@
 /** Sessions 側欄的節點形狀。純型別，不相依 vscode。 */
 
-import { ClaudeProject, SessionInfo } from "../agents/types";
+import { ClaudeProject, SessionInfo, Tool } from "../agents/types";
 import { SessionSyncStatus } from "../store/sessionStatus";
 import { ProjectRef } from "../store/sessionStore";
 
@@ -52,10 +52,13 @@ export type ProjectNode = {
    * 遠端還有這個專案的對話沒進到本機（多半是同步時被跳過的 Claude 對話），
    * count 只算還沒下來的那些。全部都下來了就沒有這個欄位。
    *
-   * 只影響提示文字——🔗 看的是 strayCwdKeys，因為「已經對應過、只剩 Codex
+   * tools 是那些對話屬於哪些 AI。少了這個，側欄只寫得出「另有 5 個待匯入」，
+   * 而使用者的疑問正是「Claude 的對話為什麼不見了」。
+   *
+   * 只影響顯示文字——🔗 看的是 strayCwdKeys，因為「已經對應過、只剩 Codex
    * 的 cwd 沒改過來」的專案不會出現在待對應清單裡，卻同樣需要修。
    */
-  unmapped?: { count: number; machines: string[] };
+  unmapped?: { count: number; machines: string[]; tools: Tool[] };
   children: (ClaudeProjectNode | CodexProjectNode)[];
 };
 

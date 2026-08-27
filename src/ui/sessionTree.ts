@@ -3,7 +3,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { getConfig, toolDirs, updateTrackedSessions } from "../config";
 import { applyRule, partialHint, SelectionSet } from "../store/selection";
-import { SessionInfo } from "../agents/types";
+import { SessionInfo, Tool } from "../agents/types";
 import { clearSessionCache } from "../agents/sessionFile";
 import { groupSessionProjects, sessionProjectIdentity } from "../agents/grouping";
 import { listClaudeProjects, listClaudeSessions } from "../agents/claude";
@@ -264,8 +264,13 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         const partial = partialHint(chosen, total);
         const summary = groupDescription(total, chosen, selected, partial);
         // 工作目錄不在這台電腦上時要一眼看得出來，否則它混在本機專案裡
-        // 看起來就像已經對應好了。
-        item.description = n.local ? summary : `未對應 · ${summary}`;
+        // 看起來就像已經對應好了。還有對話沒下來也要寫在標籤上——只放在 tooltip
+        // 的話，使用者看到的就是「這個專案只剩 Codex，Claude 的對話不見了」。
+        item.description =
+          (n.local ? summary : `未對應 · ${summary}`) +
+          (n.unmapped
+            ? ` · 另有 ${n.unmapped.count} 個${toolNames(n.unmapped.tools)}對話待匯入`
+            : "");
         item.tooltip =
           (n.cwd
             ? `工作目錄:${n.cwd}\n\n`
@@ -274,8 +279,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
             ? ""
             : n.unmapped
               ? `其他電腦（${n.unmapped.machines.join("、")}）還有這個專案的 ` +
-                `${n.unmapped.count} 個對話沒有進到本機——同步時解不出這個專案` +
-                "在這台電腦的位置就跳過了。\n\n" +
+                `${n.unmapped.count} 個${toolNames(n.unmapped.tools)}對話沒有` +
+                "進到本機——同步時解不出這個專案在這台電腦的位置就跳過了。\n\n" +
                 "指定它在本機的位置後，那些對話會自動同步回來，" +
                 "已經在本機的對話也會把工作目錄改成本機路徑。\n\n"
               : n.projectRef
@@ -800,6 +805,17 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
 /** 整層都沒勾時才給裝飾；有勾到一部分就維持正常顏色，不然會蓋掉「部分追蹤」的資訊。 */
 function dimmedUri(dim: boolean, key: string): vscode.Uri | undefined {
   return dim ? sessionStatusUri("unselected", key) : undefined;
+}
+
+/**
+ * 待匯入對話的 AI 名稱，接在數量後面（「5 個 Claude Code 對話」）。
+ * 兩種都有就不點名，句子會太長而且也沒幫助。
+ */
+function toolNames(tools: readonly Tool[]): string {
+  if (tools.length !== 1) {
+    return "";
+  }
+  return tools[0] === "claude" ? "Claude Code " : "Codex ";
 }
 
 function checkbox(selected: boolean): vscode.TreeItemCheckboxState {

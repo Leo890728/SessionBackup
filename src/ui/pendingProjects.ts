@@ -1,5 +1,6 @@
 /** 根層的分堆：哪些專案進「未對應」那一層，哪些照常列出來。純資料，不相依 vscode。 */
 
+import type { Tool } from "../agents/types";
 import type { RemoteProject } from "../store/unmappedProjects";
 import type { ProjectNode, TreeNode } from "./treeNodes";
 
@@ -46,10 +47,17 @@ export function splitPendingProjects(
     claimed.add(match.project.id);
     // 遠端的對話多半已經同步到本機了（Codex 不會被跳過），只有還沒下來的那些
     // 值得提。一個都不缺時不設這個欄位，提示改講「工作目錄還指著來源電腦」。
-    const missing = match.sessionKeys.filter((key) => !localKeys.has(key)).length;
+    const missing = match.sessionKeys.filter((key) => !localKeys.has(key));
     pending.push(
-      missing
-        ? { ...project, unmapped: { count: missing, machines: match.machines } }
+      missing.length
+        ? {
+            ...project,
+            unmapped: {
+              count: missing.length,
+              machines: match.machines,
+              tools: toolsOf(missing),
+            },
+          }
         : project
     );
   }
@@ -67,4 +75,10 @@ export function splitPendingProjects(
   }
 
   return { pending, mapped };
+}
+
+/** `tool:id` 這組 key 涵蓋了哪些 AI；順序固定成 claude、codex 好拼句子。 */
+function toolsOf(sessionKeys: readonly string[]): Tool[] {
+  const tools = new Set(sessionKeys.map((key) => key.split(":")[0]));
+  return (["claude", "codex"] as const).filter((tool) => tools.has(tool));
 }
