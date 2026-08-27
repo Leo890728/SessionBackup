@@ -18,5 +18,11 @@ export function nodeLabel(node: TreeNode): string {
       return `「${node.info.title}」`;
     case "unmappedProject":
       return `待對應專案「${node.project.displayName}」`;
+    case "pendingAi":
+      return `專案「${node.projectLabel}」待匯入的 ${
+        node.tool === "claude" ? "Claude Code" : "Codex"
+      }`;
+    case "pendingSession":
+      return `待匯入的「${node.session.title || "(無標題)"}」`;
   }
 }

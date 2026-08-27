@@ -4,7 +4,7 @@ import * as vscode from "vscode";
 import { getConfig, toolDirs, updateTrackedSessions } from "../config";
 import { applyRule, partialHint, SelectionSet } from "../store/selection";
 import { SessionInfo, Tool } from "../agents/types";
-import { clearSessionCache } from "../agents/sessionFile";
+import { clearSessionCache, fmt } from "../agents/sessionFile";
 import { groupSessionProjects, sessionProjectIdentity } from "../agents/grouping";
 import { listClaudeProjects, listClaudeSessions } from "../agents/claude";
 import { codexSessionInfo, groupCodexThreads, listCodexFiles } from "../agents/codex";
@@ -23,6 +23,7 @@ import {
   ProjectRef,
   readManifest,
   readMachineManifests,
+  revisionRelativePath,
 } from "../store/sessionStore";
 import {
   aggregateRemoteProjects,
@@ -35,6 +36,7 @@ import { relabelProjects } from "./projectLabels";
 import { sessionStatusUri } from "./sessionDecorations";
 import {
   ClaudeProjectNode,
+  PendingAiNode,
   CodexProjectNode,
   ProjectNode,
   TreeNode,
@@ -269,7 +271,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         item.description =
           (n.local ? summary : `未對應 · ${summary}`) +
           (n.unmapped
-            ? ` · 另有 ${n.unmapped.count} 個${toolNames(n.unmapped.tools)}對話待匯入`
+            ? ` · 另有 ${n.unmapped.sessions.length} 個${toolNames(pendingTools(n.unmapped.sessions))}對話待匯入`
             : "");
         item.tooltip =
           (n.cwd
@@ -279,10 +281,11 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
             ? ""
             : n.unmapped
               ? `其他電腦（${n.unmapped.machines.join("、")}）還有這個專案的 ` +
-                `${n.unmapped.count} 個${toolNames(n.unmapped.tools)}對話沒有` +
+                `${n.unmapped.sessions.length} 個${toolNames(pendingTools(n.unmapped.sessions))}對話沒有` +
                 "進到本機——同步時解不出這個專案在這台電腦的位置就跳過了。\n\n" +
                 "指定它在本機的位置後，那些對話會自動同步回來，" +
-                "已經在本機的對話也會把工作目錄改成本機路徑。\n\n"
+                "已經在本機的對話也會把工作目錄改成本機路徑。\n\n" +
+                "展開這個專案可以先讀它們——內容已經在本機備份庫裡了。\n\n"
               : n.projectRef
                 ? "這些對話是從其他電腦同步回來的，工作目錄還指著來源電腦——" +
                   "Codex 自己那邊也會用那個路徑列出它們。\n\n" +
@@ -433,6 +436,58 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         };
         return item;
       }
+      case "pendingAi": {
+        const item = new vscode.TreeItem(
+          TOOL_LABEL[n.tool],
+          vscode.TreeItemCollapsibleState.Collapsed,
+        );
+        item.id = `pending:${n.projectLabel}:${n.tool}`;
+        item.description = `${n.sessions.length} 個待匯入`;
+        item.tooltip =
+          `這些對話已經備份在 ${n.machines.join("、")}，但還沒進到這台電腦——\n` +
+          "同步時解不出這個專案在本機的位置就跳過了。\n\n" +
+          "可以先點開來讀（內容取自本機備份庫）。對應資料夾之後它們才會落地成\n" +
+          "一般的對話，屆時才有核取方塊可以決定要不要繼續備份。";
+        item.iconPath = new vscode.ThemeIcon(
+          "cloud-download",
+          new vscode.ThemeColor("descriptionForeground"),
+        );
+        item.contextValue = "pendingAi";
+        // 沒有 checkboxState：本機還沒有檔案，沒有可套用的選取規則。
+        item.resourceUri = sessionStatusUri(
+          "unselected",
+          `pending:${n.projectLabel}:${n.tool}`,
+        );
+        return item;
+      }
+      case "pendingSession": {
+        const item = new vscode.TreeItem(
+          n.session.title || "(無標題)",
+          vscode.TreeItemCollapsibleState.None,
+        );
+        item.id = `pendingSession:${n.session.tool}:${n.session.id}`;
+        const { date, time } = fmt(n.session.mtimeMs);
+        item.description = `${date} ${time} · 待匯入`;
+        item.tooltip =
+          `${n.session.title || "(無標題)"}\n\n` +
+          `備份自 ${n.session.machineId}，本機還沒有這個檔案。\n` +
+          "點一下可以直接讀備份庫裡的內容。";
+        item.iconPath = new vscode.ThemeIcon(
+          "cloud",
+          new vscode.ThemeColor("descriptionForeground"),
+        );
+        item.contextValue = "pendingSession";
+        item.resourceUri = sessionStatusUri(
+          "unselected",
+          `pendingSession:${n.session.id}`,
+        );
+        item.command = {
+          command: "sessionBackup.previewSession",
+          title: "預覽",
+          arguments: [n],
+        };
+        return item;
+      }
       case "unmappedProject": {
         const item = new vscode.TreeItem(
           n.label ?? n.project.displayName,
@@ -483,7 +538,23 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       return el.children;
     }
     if (el.kind === "project") {
-      return el.children;
+      // 還沒匯入的那一半排在本機的後面：它們沒有 checkbox，混在前面會讓
+      // 整個專案看起來像是不能勾。
+      return [...el.children, ...pendingAiNodes(el)];
+    }
+    if (el.kind === "pendingAi") {
+      const repoPath = getConfig().repoPath;
+      return el.sessions.map((session): TreeNode => ({
+        kind: "pendingSession",
+        session,
+        file: path.join(
+          repoPath,
+          ...revisionRelativePath(session.tool, session.id, session.hash).split("/"),
+        ),
+      }));
+    }
+    if (el.kind === "pendingSession") {
+      return [];
     }
     if (el.kind === "claudeProject") {
       const lookup = await this.getLookup();
@@ -549,6 +620,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       await updateTrackedSessions((current) =>
         applyAiSelection(current, node, selected),
       );
+    } else if (node.kind === "pendingAi" || node.kind === "pendingSession") {
+      // 本機還沒有檔案，沒有可套用的選取規則；對應完落地後才有核取方塊。
+      return;
     } else {
       const { key, target, level } = ruleFor(node);
       await updateTrackedSessions((current) =>
@@ -816,6 +890,34 @@ function toolNames(tools: readonly Tool[]): string {
     return "";
   }
   return tools[0] === "claude" ? "Claude Code " : "Codex ";
+}
+
+const TOOL_LABEL: Record<Tool, string> = {
+  claude: "Claude Code",
+  codex: "Codex",
+};
+
+/** 還沒匯入的那些對話依 AI 分層，與本機的 claudeProject／codexProject 並排。 */
+function pendingAiNodes(node: ProjectNode): PendingAiNode[] {
+  const pending = node.unmapped;
+  if (!pending) {
+    return [];
+  }
+  return (["claude", "codex"] as const)
+    .map((tool) => ({
+      kind: "pendingAi" as const,
+      tool,
+      projectLabel: node.label,
+      machines: pending.machines,
+      sessions: pending.sessions.filter((session) => session.tool === tool),
+    }))
+    .filter((ai) => ai.sessions.length > 0);
+}
+
+/** 待匯入對話的 AI 名稱，供 unmapped 的數量描述使用。 */
+function pendingTools(sessions: readonly { tool: Tool }[]): Tool[] {
+  const tools = new Set(sessions.map((session) => session.tool));
+  return (["claude", "codex"] as const).filter((tool) => tools.has(tool));
 }
 
 function checkbox(selected: boolean): vscode.TreeItemCheckboxState {

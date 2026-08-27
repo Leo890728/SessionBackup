@@ -1,19 +1,43 @@
+import type { Tool } from "../agents/types";
 import type { SelectionSet } from "./selection";
 import type { MachineManifest, ProjectRef } from "./sessionStore";
+
+/**
+ * 其他電腦備份過的一則對話。內容在本機備份庫的 store 裡（revisionRelativePath
+ * 拿得到路徑），所以還沒匯入也能列出來、也能預覽。
+ */
+export interface RemoteSession {
+  tool: Tool;
+  id: string;
+  /** store 裡這份 revision 的位址。 */
+  hash: string;
+  title?: string;
+  mtimeMs: number;
+  /** 備份出這一份的機器。 */
+  machineId: string;
+}
 
 /** 其他電腦備份過、但本機還解不出位置的專案。 */
 export interface RemoteProject {
   project: ProjectRef;
-  /** 屬於這個專案的遠端 session 數（以 session id 去重）。 */
+  /** 屬於這個專案的遠端 session 數（以 tool:id 去重）。 */
   count: number;
   /** 備份過它的機器，供側欄顯示來源。 */
   machines: string[];
   /**
-   * 這些 session 的 `tool:id`。同步回來的 Codex 檔本機已經有了，只有逐一比對
-   * 才分得出「遠端總共幾個」與「還有幾個沒下來」——兩個數字差很多時直接寫總數
-   * 會和節點自己標的對話數對不起來。
+   * 這些對話本身。同步回來的 Codex 檔本機已經有了，只有逐一比對才分得出
+   * 「遠端總共幾個」與「還有幾個沒下來」；而且列得出來，待匯入的那些才能
+   * 在側欄展開、直接從 store 預覽，不必先把檔案搬進本機。
    */
-  sessionKeys: string[];
+  sessions: RemoteSession[];
+}
+
+/** 這則對話在遠端清單裡的 key。與本機的 `tool:id` 是同一套。 */
+export function remoteSessionKey(session: {
+  tool: Tool;
+  id: string;
+}): string {
+  return `${session.tool}:${session.id}`;
 }
 
 /**
@@ -31,7 +55,11 @@ export function aggregateRemoteProjects(
 ): RemoteProject[] {
   const byProject = new Map<
     string,
-    { project: ProjectRef; ids: Set<string>; machines: Set<string> }
+    {
+      project: ProjectRef;
+      sessions: Map<string, RemoteSession>;
+      machines: Set<string>;
+    }
   >();
   for (const manifest of manifests) {
     if (manifest.machineId === selfMachineId) {
@@ -47,20 +75,32 @@ export function aggregateRemoteProjects(
       }
       const entry = byProject.get(session.project.id) ?? {
         project: session.project,
-        ids: new Set<string>(),
+        sessions: new Map<string, RemoteSession>(),
         machines: new Set<string>(),
       };
-      entry.ids.add(`${session.tool}:${session.id}`);
+      const key = remoteSessionKey(session);
+      const known = entry.sessions.get(key);
+      // 同一則對話被兩台備份過時取比較新的那份，預覽才不會看到舊的截斷版本。
+      if (!known || known.mtimeMs < session.mtimeMs) {
+        entry.sessions.set(key, {
+          tool: session.tool,
+          id: session.id,
+          hash: session.hash,
+          title: session.title,
+          mtimeMs: session.mtimeMs,
+          machineId: manifest.machineId,
+        });
+      }
       entry.machines.add(manifest.machineId);
       byProject.set(session.project.id, entry);
     }
   }
   return [...byProject.values()]
-    .map(({ project, ids, machines }) => ({
+    .map(({ project, sessions, machines }) => ({
       project,
-      count: ids.size,
+      count: sessions.size,
       machines: [...machines].sort(),
-      sessionKeys: [...ids],
+      sessions: [...sessions.values()].sort((a, b) => b.mtimeMs - a.mtimeMs),
     }))
     .sort((a, b) => a.project.displayName.localeCompare(b.project.displayName));
 }

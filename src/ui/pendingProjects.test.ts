@@ -26,13 +26,24 @@ function projectNode(over: Partial<ProjectNode> = {}): ProjectNode {
   };
 }
 
-/** 預設遠端這幾個對話本機都還沒有，所以 count 就是「還沒下來的數量」。 */
+/** 預設遠端這幾個對話本機都還沒有，所以全部都算「還沒下來的」。 */
 function remote(
   project: RemoteProject["project"],
   sessionKeys = ["codex:r1", "codex:r2", "claude:r3"],
   machines = ["A"]
 ): RemoteProject {
-  return { project, count: sessionKeys.length, machines, sessionKeys };
+  const sessions = sessionKeys.map((key, index) => {
+    const [tool, id] = key.split(":");
+    return {
+      tool: tool as "claude" | "codex",
+      id,
+      hash: `h-${id}`,
+      title: `對話 ${id}`,
+      mtimeMs: index + 1,
+      machineId: machines[0],
+    };
+  });
+  return { project, count: sessions.length, machines, sessions };
 }
 
 describe("splitPendingProjects", () => {
@@ -54,7 +65,7 @@ describe("splitPendingProjects", () => {
     const [node] = pending;
     assert.equal(node.kind, "project");
     assert.equal(node.kind === "project" && node.projectRef?.id, GIS.id);
-    assert.equal(node.kind === "project" && node.unmapped?.count, 4);
+    assert.equal(node.kind === "project" && node.unmapped?.sessions.length, 4);
     assert.deepEqual(
       node.kind === "project" ? node.unmapped?.machines : undefined,
       ["A", "C"]
@@ -73,7 +84,7 @@ describe("splitPendingProjects", () => {
       ],
       [remote(GIS, ["codex:r1", "codex:r2", "claude:r3"])]
     );
-    assert.equal(pending[0].kind === "project" && pending[0].unmapped?.count, 1);
+    assert.equal(pending[0].kind === "project" && pending[0].unmapped?.sessions.length, 1);
   });
 
   it("says nothing about pending conversations when they are all here", () => {
@@ -108,6 +119,24 @@ describe("splitPendingProjects", () => {
       pending[0].kind === "project" && pending[0].projectRef?.id,
       GIS.id
     );
+  });
+
+  it("carries the pending conversations themselves, not just a count", () => {
+    // 側欄要展得開這些對話（內容取自本機備份庫的 store），所以帶的是 session
+    // 本身而不是一個數字。
+    const { pending } = splitPendingProjects(
+      [projectNode({ projectRef: GIS, sessionKeys: ["codex:r1"] })],
+      [remote(GIS, ["codex:r1", "claude:r3"])]
+    );
+    const node = pending[0];
+    assert.equal(node.kind, "project");
+    const sessions = node.kind === "project" ? node.unmapped?.sessions : undefined;
+    assert.deepEqual(
+      sessions?.map((session) => `${session.tool}:${session.id}`),
+      ["claude:r3"]
+    );
+    assert.equal(sessions?.[0].hash, "h-r3");
+    assert.equal(sessions?.[0].title, "對話 r3");
   });
 
   it("keeps the remote entry standalone when no local files match it", () => {

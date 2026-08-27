@@ -58,6 +58,25 @@ export function registerSessionsCommands(deps: CommandDeps): vscode.Disposable[]
     vscode.commands.registerCommand(
       "sessionBackup.previewSession",
       async (node?: TreeNode) => {
+        // 待匯入的對話沒有本機檔案，讀的是備份庫裡的 revision。內容格式一樣，
+        // 預覽器吃的本來就是一個 JSONL 路徑。
+        if (node?.kind === "pendingSession") {
+          if (!fs.existsSync(node.file)) {
+            vscode.window.showWarningMessage(
+              "Session Backup: 這則對話的內容不在本機備份庫裡，請先同步備份庫。",
+            );
+            return;
+          }
+          await showSessionPreview(
+            node.session.tool,
+            node.file,
+            node.session.id,
+            context.extensionUri,
+            context.globalStorageUri.fsPath,
+            "synced",
+          );
+          return;
+        }
         if (node?.kind !== "session") {
           return;
         }

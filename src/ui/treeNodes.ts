@@ -3,6 +3,26 @@
 import { ClaudeProject, SessionInfo, Tool } from "../agents/types";
 import { SessionSyncStatus } from "../store/sessionStatus";
 import { ProjectRef } from "../store/sessionStore";
+import { RemoteSession } from "../store/unmappedProjects";
+
+/**
+ * 專案節點底下、還沒匯入的那一半（「Claude Code · 5 個待匯入」）。
+ * 與 claudeProject／codexProject 並排，差別是它的對話還沒有本機檔案。
+ */
+export type PendingAiNode = {
+  kind: "pendingAi";
+  tool: Tool;
+  projectLabel: string;
+  machines: string[];
+  sessions: RemoteSession[];
+};
+
+/** 待匯入的一則對話。file 指向本機備份庫 store 裡的 revision，可直接預覽。 */
+export type PendingSessionNode = {
+  kind: "pendingSession";
+  session: RemoteSession;
+  file: string;
+};
 
 export type ClaudeProjectNode = {
   kind: "claudeProject";
@@ -49,16 +69,16 @@ export type ProjectNode = {
   /** 這個節點底下每個對話的 `tool:id`，用來比對遠端還有哪些沒下來。 */
   sessionKeys: string[];
   /**
-   * 遠端還有這個專案的對話沒進到本機（多半是同步時被跳過的 Claude 對話），
-   * count 只算還沒下來的那些。全部都下來了就沒有這個欄位。
+   * 遠端還有、但還沒進到本機的對話（多半是同步時被跳過的 Claude 對話）。
+   * 全部都下來了就沒有這個欄位。
    *
-   * tools 是那些對話屬於哪些 AI。少了這個，側欄只寫得出「另有 5 個待匯入」，
-   * 而使用者的疑問正是「Claude 的對話為什麼不見了」。
+   * 這些對話的內容在本機備份庫的 store 裡，所以展開得開也預覽得了——不必為了
+   * 「先看看再決定對應到哪」把檔案搬進 ~/.claude。
    *
-   * 只影響顯示文字——🔗 看的是 strayCwdKeys，因為「已經對應過、只剩 Codex
-   * 的 cwd 沒改過來」的專案不會出現在待對應清單裡，卻同樣需要修。
+   * 只影響顯示——🔗 看的是 strayCwdKeys，因為「已經對應過、只剩 Codex 的 cwd
+   * 沒改過來」的專案不會出現在待對應清單裡，卻同樣需要修。
    */
-  unmapped?: { count: number; machines: string[]; tools: Tool[] };
+  unmapped?: { machines: string[]; sessions: RemoteSession[] };
   children: (ClaudeProjectNode | CodexProjectNode)[];
 };
 
@@ -79,6 +99,8 @@ export type TreeNode =
   | ProjectNode
   | ClaudeProjectNode
   | CodexProjectNode
+  | PendingAiNode
+  | PendingSessionNode
   | {
       kind: "session";
       info: SessionInfo;
