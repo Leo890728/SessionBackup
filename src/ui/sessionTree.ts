@@ -4,9 +4,9 @@ import * as vscode from "vscode";
 import { getConfig, toolDirs, updateTrackedSessions } from "../config";
 import { applyRule, partialHint, SelectionSet } from "../store/selection";
 import { SessionInfo, Tool } from "../agents/types";
-import { clearSessionCache, fmt } from "../agents/sessionFile";
+import { cleanTitle, clearSessionCache, fmt, readFirstLines } from "../agents/sessionFile";
 import { groupSessionProjects, sessionProjectIdentity } from "../agents/grouping";
-import { listClaudeProjects, listClaudeSessions } from "../agents/claude";
+import { claudeAiTitle, listClaudeProjects, listClaudeSessions } from "../agents/claude";
 import { codexSessionInfo, groupCodexThreads, listCodexFiles } from "../agents/codex";
 import {
   buildStatusLookup,
@@ -29,6 +29,7 @@ import {
   aggregateRemoteProjects,
   filterUnmapped,
   RemoteProject,
+  RemoteSession,
   remoteProjectsBySession,
 } from "../store/unmappedProjects";
 import { splitPendingProjects } from "./pendingProjects";
@@ -76,6 +77,11 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
    * 掃當層的 sessions，並記住結果；檔案沒動過就不重掃，refresh 也沿用。
    */
   private readonly secretScanCache = new Map<string, boolean>();
+  /**
+   * 待匯入對話的標題（store 檔案路徑 → 標題，空字串代表讀不到）。
+   * store 的路徑含內容雜湊，同一個路徑的內容不會變，所以 refresh 也能沿用。
+   */
+  private readonly pendingTitles = new Map<string, string>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -189,6 +195,30 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       light: vscode.Uri.joinPath(this.extensionUri, "media", "light", name),
       dark: vscode.Uri.joinPath(this.extensionUri, "media", "dark", name),
     };
+  }
+
+  /**
+   * 待匯入對話的標題。manifest 只保存 Codex 的標題（來自 session index），
+   * Claude 的一直是空的——它的標題寫在對話檔自己的 aiTitle 欄位裡。
+   * 所以 Claude 要翻備份庫裡那份 revision 的開頭才拿得到。
+   *
+   * 快取以檔案路徑為 key 就夠了：store 的路徑含內容雜湊，同一個路徑的內容
+   * 永遠不會變。
+   */
+  private async pendingTitle(
+    session: RemoteSession,
+    file: string,
+  ): Promise<string | undefined> {
+    if (session.tool !== "claude") {
+      return session.title;
+    }
+    const cached = this.pendingTitles.get(file);
+    if (cached !== undefined) {
+      return cached || undefined;
+    }
+    const title = claudeAiTitle(await readFirstLines(file));
+    this.pendingTitles.set(file, title ? cleanTitle(title) : "");
+    return this.pendingTitles.get(file) || undefined;
   }
 
   /** 展開某一層時才掃那層的 sessions；回傳掃到金鑰的檔案路徑。 */
@@ -448,9 +478,12 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           "同步時解不出這個專案在本機的位置就跳過了。\n\n" +
           "可以先點開來讀（內容取自本機備份庫）。對應資料夾之後它們才會落地成\n" +
           "一般的對話，屆時才有核取方塊可以決定要不要繼續備份。";
-        item.iconPath = new vscode.ThemeIcon(
-          "cloud-download",
-          new vscode.ThemeColor("descriptionForeground"),
+        // 與本機的 AI 節點用同一張圖：這一層代表的是同一件事，只差還沒落地。
+        // 「還沒下來」由列尾的描述與整層調暗表示，不必換成別的圖示。
+        item.iconPath = vscode.Uri.joinPath(
+          this.extensionUri,
+          "media",
+          `${n.tool}.png`,
         );
         item.contextValue = "pendingAi";
         // 沒有 checkboxState：本機還沒有檔案，沒有可套用的選取規則。
@@ -544,14 +577,19 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     }
     if (el.kind === "pendingAi") {
       const repoPath = getConfig().repoPath;
-      return el.sessions.map((session): TreeNode => ({
-        kind: "pendingSession",
-        session,
-        file: path.join(
-          repoPath,
-          ...revisionRelativePath(session.tool, session.id, session.hash).split("/"),
-        ),
-      }));
+      return Promise.all(
+        el.sessions.map(async (session): Promise<TreeNode> => {
+          const file = path.join(
+            repoPath,
+            ...revisionRelativePath(session.tool, session.id, session.hash).split("/"),
+          );
+          return {
+            kind: "pendingSession",
+            session: { ...session, title: await this.pendingTitle(session, file) },
+            file,
+          };
+        }),
+      );
     }
     if (el.kind === "pendingSession") {
       return [];
