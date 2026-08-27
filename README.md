@@ -207,6 +207,9 @@ Claude Code 以本機專案路徑區分 session。擴充功能不把 A 電腦的
   不會 commit 到共享備份庫。
 - 共享 manifest 只保存 `projectId`、顯示名稱、remote hash 與 repository-relative path，
   不保存本機絕對路徑或 Claude 的路徑 bucket。
+- bucket 名稱由本機路徑推算，`:`、`\`、`/`、`_` 都換成 `-`（與 Claude Code 一致，
+  例如 `secure_CI_pipeline` 的 bucket 是 `c--…-secure-CI-pipeline`）。這個規則必須
+  完全相符，否則匯入的對話會落在 Claude Code 不會去讀的資料夾裡。
 
 找不到對應時同步不中斷也不詢問：該專案在 **Sessions** 側邊欄顯示成 ☁ 待對應節點，
 點擊才進入「使用目前工作區 / 選擇本機資料夾」，指定後自動再同步一次。之後可執行
@@ -241,12 +244,24 @@ B 電腦在 `D:\` 時，這個欄位視為**機器本地屬性**處理：
 
 - Sessions 採 **專案 → AI（Claude Code / Codex）→ 對話** 三層結構；兩種 AI 的工作目錄
   相同時會合併到同一個專案，專案與對話皆以最近更新優先排列。
+- 工作目錄不同、但 `projectId` 相同時也會合併：同一個專案在兩台電腦的路徑不一樣，
+  同步回來的檔案帶著來源電腦的 cwd，光看路徑會變成兩列。身分取自本機
+  `project-mappings.json` 或其他電腦的 manifest（以 session id 反查），
+  合併後以本機真的找得到的那個路徑當門面。
+- 專案名稱預設只顯示資料夾名，**撞名才逐段往上補路徑**（`GitHub\api` / `work\api`），
+  補到根目錄仍相同才加機器名。這是在畫面組出來時才算的：撞名是「同時被顯示的
+  那一組」的性質，備份當下那台電腦不知道另一台也有同名專案，算不出來也會過期。
+  `projectId` 相同的兩筆永遠不消歧義——它們是同一個專案。
 - Codex 子代理 thread（session_meta 含 `parent_thread_id`，如 guardian）不會當獨立
   session 顯示，而是掛在父 thread 最新 rollout 檔的節點下展開；父檔案已被 Codex 清除的
   子 thread 不顯示（仍會照常備份）。
 - 本機解不出位置的專案收在最上面的 **未對應專案** 那一層（預設收合），不與已對應的
   專案混在一起：包含其他電腦備份過但本機還沒有檔案的 Claude 專案，以及本機有檔案、
-  但工作目錄是別台電腦路徑的對話。
+  但工作目錄是別台電腦路徑的對話。同一個專案的這兩半（同步時 Claude 被跳過、Codex
+  照樣匯入）以 `projectId` 併成同一個節點，不會分成兩列。
+- 該節點的 🔗 **對應到本機資料夾** 除了讓被跳過的 Claude 對話同步回來，也會把本機
+  這些 Codex rollout 的 `session_meta.cwd` 改寫成本機路徑——cwd 不算進內容雜湊，
+  同步比對到 identical 就跳過，不改寫的話 Codex 自己會一直用來源電腦的路徑列出它們。
 - 專案、AI 與對話節點左側都有核取方塊，用來決定備份哪些對話。
 - 備份狀態比照檔案總管的 git 裝飾，以列尾字母表示（比對本機 manifest，不需連網）：
   - **U**（綠）**待備份** — 已勾選但備份庫裡還沒有

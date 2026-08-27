@@ -100,3 +100,19 @@ export async function clearLegacyIgnoredSessions(): Promise<void> {
     .getConfiguration("sessionBackup")
     .update("ignoredSessions", undefined, vscode.ConfigurationTarget.Global);
 }
+
+/**
+ * 兩個工具的資料根目錄。設定裡沒有該來源時退回預設家目錄——側欄與命令都要用
+ * 同一份結果，否則命令改到的檔案會不是側欄列出來的那些。
+ */
+export function toolDirs(): { claude: string; codex: string } {
+  const cfg = getConfig();
+  return {
+    claude:
+      cfg.sources.find((s) => s.name === "claude")?.path ??
+      path.join(os.homedir(), ".claude"),
+    codex:
+      cfg.sources.find((s) => s.name === "codex")?.path ??
+      path.join(os.homedir(), ".codex"),
+  };
+}

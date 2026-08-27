@@ -87,8 +87,16 @@ export function normalizeGitRemote(remote: string): string {
   }
 }
 
+/**
+ * 路徑編成 Claude Code 的 projects bucket 名稱。
+ *
+ * 底線也算分隔符：Claude Code 自己就是這樣編的（`secure_CI_pipeline` 的 bucket 是
+ * `c--Users-…-secure-CI-pipeline`）。少換這一個字元的後果不只是側欄多一列——
+ * 同步匯入時會照這個名字建資料夾，Claude Code 永遠不會去讀它，那些對話等於匯了
+ * 也看不到。比對一律 case-insensitive，磁碟機代號大小寫不影響。
+ */
 export function encodeClaudeProjectDir(localPath: string): string {
-  return path.resolve(localPath).replace(/[:\\/]/g, "-");
+  return path.resolve(localPath).replace(/[:\\/_]/g, "-");
 }
 
 export function fallbackProject(localPath: string): ProjectRef {

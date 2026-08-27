@@ -35,13 +35,31 @@ export type ProjectNode = {
    * 「以前備份過」，圖示上的雲章就是靠這個旗標決定要不要畫。
    */
   backedUp: boolean;
+  /**
+   * 這個專案的身分。來自本機 registry 或其他電腦的 manifest（見 resolveProjectRefs）。
+   * 這也是「同一個專案在兩台電腦有兩個路徑」能併成一個節點的依據。
+   */
+  projectRef?: ProjectRef;
+  /**
+   * 這個節點底下、工作目錄不在本機的那些路徑分組 key。有值代表還有檔案帶著
+   * 來源電腦的 cwd：側欄已經併好了，但 Codex CLI 自己仍會用那個路徑列出它們，
+   * 要改寫檔案才算真的修好。有值且有 projectRef 時列尾才出現 🔗。
+   */
+  strayCwdKeys: string[];
+  /**
+   * 遠端還有這個專案的對話沒進到本機（多半是同步時被跳過的 Claude 對話）。
+   * 只影響提示文字——🔗 看的是 strayCwdKeys，因為「已經對應過、只剩 Codex
+   * 的 cwd 沒改過來」的專案不會出現在待對應清單裡，卻同樣需要修。
+   */
+  unmapped?: { count: number; machines: string[] };
   children: (ClaudeProjectNode | CodexProjectNode)[];
 };
 
 /**
  * 「未對應」那一層：本機解不出位置的專案都收在這裡，排在已對應的專案之前。
  * 底下混了兩種——本機有檔案但工作目錄不存在的（多半是別台同步回來的 Codex 對話），
- * 以及只存在於其他電腦備份、本機還沒有檔案的 Claude 專案。
+ * 以及只存在於其他電腦備份、本機還沒有檔案的 Claude 專案。同一個專案同時符合
+ * 兩者時只會出現一次，見 splitPendingProjects。
  */
 export type UnmappedGroupNode = {
   kind: "unmappedGroup";
@@ -64,10 +82,13 @@ export type TreeNode =
       hasSecret?: boolean;
       subs?: TreeNode[];
     }
-  /** 遠端備份過、本機還沒有對應資料夾的 Claude 專案；點一下建立映射。 */
+  /** 遠端備份過、本機連檔案都還沒有的專案；點一下建立映射。本機已有檔案的那半
+   *  併進 ProjectNode.unmapped，不會在這裡重複出現。 */
   | {
       kind: "unmappedProject";
       project: ProjectRef;
       count: number;
       machines: string[];
+      /** 撞名時消歧義過的標籤；沒撞名就沿用 project.displayName。 */
+      label?: string;
     };

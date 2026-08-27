@@ -78,32 +78,63 @@ export function sessionProjectIdentity(
  *
  * isLocalPath 判斷專案在這台電腦上有沒有位置；解不出位置的排在最後，
  * 不會和真正的本機專案混在一起（呼叫端據此顯示成「未對應」）。
+ *
+ * projectIdFor 把工作目錄分組再往上收斂成「專案身分」分組：同一個專案在兩台電腦
+ * 的路徑不同，同步回來的檔案帶著來源電腦的 cwd，光看路徑會是兩組。認得出身分就
+ * 併成一組，並以本機真的存在的那個路徑當這組的門面。認不出身分的維持路徑分組。
  */
 export function groupSessionProjects(
   claudeProjects: readonly ClaudeProject[],
   codexTopLevel: readonly SessionInfo[],
-  isLocalPath: (cwd: string | undefined) => boolean = () => true
+  isLocalPath: (cwd: string | undefined) => boolean = () => true,
+  projectIdFor: (identityKey: string) => string | undefined = () => undefined
 ): SessionProjectGroup[] {
   interface MutableProject extends SessionProjectIdentity {
     claudeProjects: ClaudeProject[];
     codexSessions: SessionInfo[];
     latestMtime: number;
+    /** 吸收進來、但工作目錄不在本機的路徑分組 key，供呼叫端回頭找那些檔案。 */
+    strayKeys: Set<string>;
   }
+
+  // 合併判斷會對同一個工作目錄問好幾次（是不是 stray、要不要當門面、最後的 local）。
+  // isLocalPath 實際上是 fs.existsSync，每個路徑只該問一次。
+  const localCache = new Map<string, boolean>();
+  const local = (cwd: string | undefined): boolean => {
+    const cacheKey = cwd ?? "";
+    let hit = localCache.get(cacheKey);
+    if (hit === undefined) {
+      hit = isLocalPath(cwd);
+      localCache.set(cacheKey, hit);
+    }
+    return hit;
+  };
 
   const projects = new Map<string, MutableProject>();
   const ensure = (
     identity: SessionProjectIdentity,
     latestMtime: number
   ): MutableProject => {
-    let project = projects.get(identity.key);
+    const groupKey = projectIdFor(identity.key) ?? identity.key;
+    let project = projects.get(groupKey);
     if (!project) {
       project = {
         ...identity,
         claudeProjects: [],
         codexSessions: [],
         latestMtime,
+        strayKeys: new Set<string>(),
       };
-      projects.set(identity.key, project);
+      projects.set(groupKey, project);
+    }
+    if (!local(identity.cwd)) {
+      project.strayKeys.add(identity.key);
+    }
+    // 門面要用本機真的找得到的那個路徑，否則合併後的節點會顯示來源電腦的路徑。
+    if (!local(project.cwd) && local(identity.cwd)) {
+      project.key = identity.key;
+      project.label = identity.label;
+      project.cwd = identity.cwd;
     }
     project.latestMtime = Math.max(project.latestMtime, latestMtime);
     return project;
@@ -157,7 +188,10 @@ export function groupSessionProjects(
         cwd: project.cwd,
         ai,
         latestMtime: project.latestMtime,
-        local: isLocalPath(project.cwd),
+        local: local(project.cwd),
+        // 工作目錄不在本機的那些路徑：檔案還帶著來源電腦的 cwd，要改寫才會
+        // 連 Codex CLI 自己也用本機路徑列出它們。
+        strayCwdKeys: [...project.strayKeys],
       };
     })
     .sort(

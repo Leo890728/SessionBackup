@@ -117,10 +117,11 @@ async function readClaudeProjectCwd(file: string): Promise<string | undefined> {
   return undefined;
 }
 
+/** 編碼規則見 encodeClaudeProjectDir：底線也是分隔符。 */
 function cwdMatchesClaudeProjectDir(cwd: string, projectDir: string): boolean {
   const normalized = sessionProjectIdentity(cwd).cwd;
   return (
-    normalized?.replace(/[:\\/]/g, "-").toLowerCase() === projectDir.toLowerCase()
+    normalized?.replace(/[:\\/_]/g, "-").toLowerCase() === projectDir.toLowerCase()
   );
 }
 

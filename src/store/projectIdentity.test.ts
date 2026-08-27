@@ -29,6 +29,18 @@ describe("project identity", () => {
     }
   });
 
+  it("treats underscores as separators, the way Claude Code does", () => {
+    // 實測：C:\Users\user\Documents\GitHub\secure_CI_pipeline 的 bucket 是
+    // c--Users-user-Documents-GitHub-secure-CI-pipeline。少換這個字元的話，
+    // 匯入的對話會落在 Claude Code 永遠不會讀的資料夾裡。
+    if (process.platform === "win32") {
+      assert.equal(
+        encodeClaudeProjectDir("C:\\GitHub\\secure_CI_pipeline"),
+        "C--GitHub-secure-CI-pipeline"
+      );
+    }
+  });
+
   it("uses git remote plus repository-relative workspace path", async () => {
     const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "project-id-test-"));
     const child = path.join(root, "packages", "web");

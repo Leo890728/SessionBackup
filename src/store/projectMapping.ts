@@ -47,6 +47,23 @@ export class ProjectMappingRegistry {
     )?.localPath;
   }
 
+  /**
+   * 只讀這個本機路徑已經記住的專案身分。與 identifyByCwd 的差別是完全沒有副作用：
+   * 不做 git 偵測、不寫檔、不升級身分。側欄每次 refresh 都要為每個工作目錄查一次，
+   * 走 identifyByCwd 會在畫面重繪時開一堆 git 子程序。
+   */
+  async projectForLocalPath(cwd: string): Promise<ProjectRef | undefined> {
+    if (!path.isAbsolute(cwd)) {
+      return undefined;
+    }
+    await this.load();
+    const resolved = path.resolve(cwd).toLowerCase();
+    const found = this.data!.mappings.find(
+      (mapping) => path.resolve(mapping.localPath).toLowerCase() === resolved
+    );
+    return found ? publicRef(found) : undefined;
+  }
+
   /** 檔案被外部刪除（除錯命令清資料）後丟掉記憶體快取，否則下次寫入會把舊資料寫回去。 */
   reset(): void {
     this.data = undefined;

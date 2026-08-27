@@ -3,7 +3,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { localizeCodexText, materializeCodexRevision, readCodexMetaCwd } from "./codexLocalize";
+import {
+  localizeCodexText,
+  materializeCodexRevision,
+  readCodexMetaCwd,
+  relocalizeCodexProject,
+} from "./codexLocalize";
+import { sessionProjectIdentity } from "./grouping";
 import { classifyJsonlText } from "../store/sessionStore";
 
 const meta = (cwd: string) =>
@@ -109,5 +115,70 @@ describe("舊格式 model_provider 修復", () => {
   it("修復前後的內容在同步比對中視為相同", () => {
     const repaired = normalizeCodexMeta(oldMeta).text;
     assert.equal(classifyJsonlText(oldMeta, repaired), "same");
+  });
+});
+
+describe("對應專案後改寫既有 rollout 的 cwd", () => {
+  const REMOTE = "/other/pc/GIS";
+  const LOCAL = "/work/GIS";
+
+  /** 在 sessions/YYYY/MM/DD 底下放一份 rollout，回傳檔案路徑。 */
+  async function rollout(root: string, name: string, cwd: string): Promise<string> {
+    const dir = path.join(root, "sessions", "2026", "07", "15");
+    await fs.promises.mkdir(dir, { recursive: true });
+    const file = path.join(dir, `rollout-2026-07-15T00-00-00-${name}.jsonl`);
+    await fs.promises.writeFile(file, [meta(cwd), msg("hi")].join("\n"), "utf8");
+    return file;
+  }
+
+  it("只改屬於這個專案的檔案，其餘不動", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "codex-relocalize-"));
+    try {
+      const mine = await rollout(root, "aaaaaaaa", REMOTE);
+      const other = await rollout(root, "bbbbbbbb", "/other/pc/Web");
+      const key = sessionProjectIdentity(REMOTE).key;
+
+      const changed = await relocalizeCodexProject(
+        path.join(root, "sessions"),
+        (cwd) => sessionProjectIdentity(cwd).key === key,
+        LOCAL
+      );
+
+      assert.deepEqual(changed, [mine]);
+      assert.equal(await readCodexMetaCwd(mine), LOCAL);
+      assert.equal(await readCodexMetaCwd(other), "/other/pc/Web");
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("已經是本機路徑時不重寫檔案", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "codex-relocalize-"));
+    try {
+      const file = await rollout(root, "cccccccc", LOCAL);
+      const before = await fs.promises.readFile(file, "utf8");
+      const changed = await relocalizeCodexProject(
+        path.join(root, "sessions"),
+        () => true,
+        LOCAL
+      );
+      assert.deepEqual(changed, []);
+      assert.equal(await fs.promises.readFile(file, "utf8"), before);
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("改寫後的內容在同步比對中仍視為相同，不會生出新的 revision", async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "codex-relocalize-"));
+    try {
+      const file = await rollout(root, "dddddddd", REMOTE);
+      const before = await fs.promises.readFile(file, "utf8");
+      await relocalizeCodexProject(path.join(root, "sessions"), () => true, LOCAL);
+      const after = await fs.promises.readFile(file, "utf8");
+      assert.equal(classifyJsonlText(before, after), "same");
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
   });
 });

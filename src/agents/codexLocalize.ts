@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { listCodexFiles } from "./codex";
 import { codexMetaCwd, codexSessionMeta } from "./codexMeta";
 
 /**
@@ -104,4 +105,39 @@ export async function materializeCodexRevision(
   const text = await fs.promises.readFile(sourceFile, "utf8");
   const { text: normalized } = normalizeCodexMeta(text, localCwd);
   await fs.promises.writeFile(targetFile, normalized, "utf8");
+}
+
+/**
+ * 把本機既有 rollout 檔的 cwd 改寫成本機路徑，回傳實際改到的檔案。
+ *
+ * 匯入時解不出映射的 Codex 對話會保留來源電腦的 cwd。使用者事後手動對應了專案，
+ * 同步不會回頭修它——cwd 不算進內容雜湊，sync 比對到 identical 就跳過了。所以
+ * 對應完要直接改寫，Codex CLI 才會用本機路徑列出這些對話。
+ *
+ * belongsToProject 由呼叫端提供，用的是側欄的分組規則，改到的才剛好是那個節點
+ * 底下看得到的檔案（含子代理檔——它們的 session_meta 也帶同一個 cwd）。
+ */
+export async function relocalizeCodexProject(
+  sessionsRoot: string,
+  belongsToProject: (cwd: string | undefined) => boolean,
+  localCwd: string
+): Promise<string[]> {
+  const changedFiles: string[] = [];
+  for (const { file } of await listCodexFiles(sessionsRoot)) {
+    const cwd = await readCodexMetaCwd(file);
+    if (cwd === localCwd || !belongsToProject(cwd)) {
+      continue;
+    }
+    try {
+      const text = await fs.promises.readFile(file, "utf8");
+      const { text: normalized, changed } = normalizeCodexMeta(text, localCwd);
+      if (changed) {
+        await fs.promises.writeFile(file, normalized, "utf8");
+        changedFiles.push(file);
+      }
+    } catch {
+      // 單一檔案讀寫失敗（權限、正在被寫入）不該中斷整批，其餘照改。
+    }
+  }
+  return changedFiles;
 }

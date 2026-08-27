@@ -140,6 +140,73 @@ describe("groupSessionProjects", () => {
     assert.equal(groups[0].local, false);
   });
 
+  it("merges two paths of one project and fronts the local one", () => {
+    // 同一個專案在兩台電腦的路徑不同：同步回來的檔案帶著來源電腦的 cwd，
+    // 光看路徑是兩組，認得出身分就該併成一組。
+    const isLocal = (cwd: string | undefined) =>
+      cwd?.toLowerCase().startsWith("d:") ?? true;
+    const groups = groupSessionProjects(
+      [],
+      [codex("imported", "C:\\Work\\App", 300), codex("native", "D:\\Work\\App", 100)],
+      isLocal,
+      () => "git-same"
+    );
+
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0].key, "windows:d:\\work\\app");
+    assert.equal(groups[0].cwd, "D:\\Work\\App");
+    assert.equal(groups[0].local, true);
+    assert.equal(groups[0].latestMtime, 300);
+    assert.deepEqual(groups[0].strayCwdKeys, ["windows:c:\\work\\app"]);
+    assert.deepEqual(
+      groups[0].ai[0].tool === "codex"
+        ? groups[0].ai[0].sessions.map((s) => s.id)
+        : [],
+      ["imported", "native"]
+    );
+  });
+
+  it("reports its own path as stray when nothing local shares the identity", () => {
+    const groups = groupSessionProjects(
+      [],
+      [codex("imported", "C:\\Work\\App", 300)],
+      () => false,
+      () => "git-same"
+    );
+
+    assert.equal(groups[0].local, false);
+    assert.deepEqual(groups[0].strayCwdKeys, ["windows:c:\\work\\app"]);
+  });
+
+  it("leaves paths apart when the caller cannot identify them", () => {
+    const groups = groupSessionProjects(
+      [],
+      [codex("a", "C:\\Work\\App", 300), codex("b", "D:\\Work\\App", 100)],
+      () => true
+    );
+
+    assert.equal(groups.length, 2);
+    assert.deepEqual(
+      groups.flatMap((group) => group.strayCwdKeys),
+      []
+    );
+  });
+
+  it("does not merge two projects with different identities", () => {
+    const id = new Map([
+      ["windows:c:\\work\\app", "git-one"],
+      ["windows:d:\\work\\app", "git-two"],
+    ]);
+    const groups = groupSessionProjects(
+      [],
+      [codex("a", "C:\\Work\\App", 300), codex("b", "D:\\Work\\App", 100)],
+      () => true,
+      (key) => id.get(key)
+    );
+
+    assert.equal(groups.length, 2);
+  });
+
   it("keeps a Claude bucket without trusted cwd separate from missing Codex cwd", () => {
     const groups = groupSessionProjects(
       [claude(undefined, 100)],

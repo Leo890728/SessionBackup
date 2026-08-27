@@ -225,12 +225,12 @@
         },
         {
           "command": "sessionBackup.mapProject",
-          "when": "view == sessionBackup.sessions && viewItem == unmappedProject",
+          "when": "view == sessionBackup.sessions && (viewItem == unmappedProject || viewItem =~ /^projectUnmapped/)",
           "group": "inline"
         },
         {
           "command": "sessionBackup.mapProject",
-          "when": "view == sessionBackup.sessions && viewItem == unmappedProject",
+          "when": "view == sessionBackup.sessions && (viewItem == unmappedProject || viewItem =~ /^projectUnmapped/)",
           "group": "1_selection@1"
         }
       ],

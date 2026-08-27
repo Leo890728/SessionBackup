@@ -96,8 +96,17 @@ export interface SessionProjectGroup extends SessionProjectIdentity {
   /**
    * 工作目錄在這台電腦上找得到。false 的典型情況是從別台電腦同步回來的 Codex
    * 對話：檔案在本機，cwd 卻是那台電腦的路徑，本機沒有對應的專案資料夾。
+   *
+   * 專案身分把兩個路徑併成一組時，只要其中一個路徑在本機找得到就是 true，
+   * key/label/cwd 也會採用那個路徑。
    */
   local: boolean;
+  /**
+   * 這一組裡工作目錄不在本機的路徑分組 key。這些檔案還帶著來源電腦的 cwd——
+   * 併進來只解決了側欄的顯示，Codex CLI 自己仍會用那個路徑列出它們，
+   * 要改寫檔案才算真的修好（見 relocalizeCodexProject）。
+   */
+  strayCwdKeys: string[];
 }
 
 export type TranscriptBlock =

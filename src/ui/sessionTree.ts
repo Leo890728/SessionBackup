@@ -1,8 +1,7 @@
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
-import { getConfig, updateTrackedSessions } from "../config";
+import { getConfig, toolDirs, updateTrackedSessions } from "../config";
 import { applyRule, partialHint, SelectionSet } from "../store/selection";
 import { SessionInfo } from "../agents/types";
 import { clearSessionCache } from "../agents/sessionFile";
@@ -21,6 +20,7 @@ import {
   machineIdFromConfig,
   MachineManifest,
   manifestRelativePath,
+  ProjectRef,
   readManifest,
   readMachineManifests,
 } from "../store/sessionStore";
@@ -28,7 +28,10 @@ import {
   aggregateRemoteProjects,
   filterUnmapped,
   RemoteProject,
+  remoteProjectsBySession,
 } from "../store/unmappedProjects";
+import { splitPendingProjects } from "./pendingProjects";
+import { relabelProjects } from "./projectLabels";
 import { sessionStatusUri } from "./sessionDecorations";
 import {
   ClaudeProjectNode,
@@ -225,8 +228,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         item.description = String(n.count);
         item.tooltip =
           `${n.count} 個專案在這台電腦上找不到位置。\n\n` +
-          "包含其他電腦備份過、本機還沒有檔案的 Claude 專案（點它指定資料夾後會自動同步），" +
-          "以及本機有檔案、但工作目錄是別台電腦路徑的對話。";
+          "有連結圖示的可以指定它在本機的資料夾：還沒匯入的對話會同步回來，" +
+          "已經在本機、但工作目錄還指著別台電腦的對話也會一併改成本機路徑。\n\n" +
+          "其餘的是工作目錄已被移動或刪除的專案，對話仍可瀏覽與勾選。";
         item.iconPath = new vscode.ThemeIcon(
           "cloud",
           new vscode.ThemeColor("descriptionForeground"),
@@ -268,8 +272,17 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
             : "這個專案沒有可用的工作目錄。\n\n") +
           (n.local
             ? ""
-            : "這個工作目錄在本機不存在——多半是從其他電腦同步回來的對話，" +
-              "也可能是資料夾已被移動或刪除。對話仍可瀏覽與勾選。\n\n") +
+            : n.unmapped
+              ? `其他電腦（${n.unmapped.machines.join("、")}）備份過這個專案的 ` +
+                `${n.unmapped.count} 個對話，但本機找不到對應的資料夾。\n\n` +
+                "指定它在本機的位置後，還沒匯入的對話會自動同步回來，" +
+                "本機這些對話的工作目錄也會一併改成本機路徑。\n\n"
+              : n.projectRef
+                ? "這些對話是從其他電腦同步回來的，工作目錄還指著來源電腦——" +
+                  "Codex 自己那邊也會用那個路徑列出它們。\n\n" +
+                  "指定它在本機的位置，就會一併改成本機路徑。\n\n"
+                : "這個工作目錄在本機不存在——多半是從其他電腦同步回來的對話，" +
+                  "也可能是資料夾已被移動或刪除。對話仍可瀏覽與勾選。\n\n") +
           (chosen === 0 && n.backedUp
             ? "雲端備份庫裡已經有這個專案的對話（圖示右下角的雲）；" +
               "取消追蹤只是不再更新，既有備份不會被刪除。\n\n"
@@ -294,7 +307,11 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           chosen === 0 ? "unselected" : "synced",
           `project:${n.key}`,
         );
-        item.contextValue = selected ? "projectSelected" : "projectUnselected";
+        // 可以對應的專案多一個 contextValue 前綴，menus 才掛得上「對應到本機資料夾」；
+        // 尾綴維持 Selected/Unselected，勾選那組選單的 when 條件不受影響。
+        item.contextValue =
+          (n.projectRef && n.strayCwdKeys.length ? "projectUnmapped" : "project") +
+          (selected ? "Selected" : "Unselected");
         item.checkboxState = checkbox(selected);
         return item;
       }
@@ -412,7 +429,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       }
       case "unmappedProject": {
         const item = new vscode.TreeItem(
-          n.project.displayName,
+          n.label ?? n.project.displayName,
           vscode.TreeItemCollapsibleState.None,
         );
         item.id = `unmapped:${n.project.id}`;
@@ -446,16 +463,12 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       ]);
       // 待處理的東西擺前面：解不出本機位置的專案（本機有檔案但工作目錄不在）
       // 與只在其他電腦備份過的專案，都收進同一層，不跟已對應的專案混在一起。
-      const pending: TreeNode[] = [
-        ...projects.filter((project) => !project.local),
-        ...unmapped.map((entry): TreeNode => ({
-          kind: "unmappedProject",
-          project: entry.project,
-          count: entry.count,
-          machines: entry.machines,
-        })),
-      ];
-      const mapped = projects.filter((project) => project.local);
+      // 同一個專案的這兩半在 splitPendingProjects 併成一個節點。
+      const split = splitPendingProjects(projects, unmapped);
+      // 標籤在這裡才決定：撞名是「同時被顯示的這一組」的性質，備份時算不出來。
+      const relabelled = relabelProjects([...split.pending, ...split.mapped]);
+      const pending = relabelled.slice(0, split.pending.length);
+      const mapped = relabelled.slice(split.pending.length);
       return pending.length
         ? [{ kind: "unmappedGroup", count: pending.length, children: pending }, ...mapped]
         : mapped;
@@ -563,6 +576,74 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     return this.localProjects;
   }
 
+  /**
+   * 每個工作目錄分組屬於哪個專案。兩個來源缺一不可：
+   *
+   * - 本機 registry：認得這台電腦自己的路徑（唯讀查，不做 git 偵測也不寫檔）。
+   * - 其他電腦的 manifest：認得同步回來、cwd 還指著來源電腦的那些檔案——它們在
+   *   本機 registry 裡查不到，因為那個路徑在這台電腦上根本不存在。
+   *
+   * 兩邊都指向同一個 projectId 時，groupSessionProjects 就會把兩個路徑併成一組。
+   */
+  private async resolveProjectRefs(
+    claudeProjects: readonly { dir: string; cwd?: string; decoded: string; sessionIds: string[] }[],
+    codexInfos: readonly SessionInfo[],
+    remoteBySession: Map<string, ProjectRef>,
+  ): Promise<Map<string, ProjectRef>> {
+    const refByKey = new Map<string, ProjectRef>();
+    const remember = (
+      identityKey: string,
+      fallback: () => ProjectRef | undefined,
+    ): void => {
+      if (refByKey.has(identityKey)) {
+        return;
+      }
+      const ref = fallback();
+      if (ref) {
+        refByKey.set(identityKey, ref);
+      }
+    };
+
+    // 1. 本機 registry。先查它，本機路徑的身分才是權威來源。
+    const localCwds = new Map<string, string>();
+    for (const info of codexInfos) {
+      const identity = sessionProjectIdentity(info.cwd);
+      if (identity.cwd) {
+        localCwds.set(identity.key, identity.cwd);
+      }
+    }
+    for (const project of claudeProjects) {
+      const identity = sessionProjectIdentity(project.cwd ?? project.decoded);
+      if (project.cwd && identity.cwd) {
+        localCwds.set(identity.key, identity.cwd);
+      }
+    }
+    for (const [key, cwd] of localCwds) {
+      const ref = await this.projects.projectForLocalPath(cwd);
+      if (ref) {
+        refByKey.set(key, ref);
+      }
+    }
+
+    // 2. 其他電腦的 manifest，用 session id 反查。
+    for (const info of codexInfos) {
+      remember(sessionProjectIdentity(info.cwd).key, () =>
+        remoteBySession.get(`codex:${info.backupId}`),
+      );
+    }
+    for (const project of claudeProjects) {
+      const identityKey = project.cwd
+        ? sessionProjectIdentity(project.cwd).key
+        : `claudeBucket:${path.basename(project.dir).toLowerCase()}`;
+      remember(identityKey, () =>
+        project.sessionIds
+          .map((id) => remoteBySession.get(`claude:${id}`))
+          .find((ref): ref is ProjectRef => Boolean(ref)),
+      );
+    }
+    return refByKey;
+  }
+
   /** 建立與選取狀態無關的「專案 → AI」索引；只有完整 refresh 才重讀 metadata。 */
   private async buildLocalProjectNodes(): Promise<ProjectNode[]> {
     const dirs = toolDirs();
@@ -595,17 +676,32 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     );
     const { topLevel, subsByHost } = groupCodexThreads(codexInfos);
     // manifest 的 id 就是 Claude 的檔名 id 與 Codex 的 backupId，兩邊可以直接比對。
+    const manifests = await this.getMachineManifests();
     const backedUpIds = new Set(
-      (await this.getMachineManifests()).flatMap((manifest) =>
+      manifests.flatMap((manifest) =>
         manifest.sessions.map((session) => `${session.tool}:${session.id}`),
       ),
+    );
+    const remoteBySession = remoteProjectsBySession(
+      manifests,
+      machineIdFromConfig(getConfig()),
+    );
+    const refByCwdKey = await this.resolveProjectRefs(
+      claudeProjects,
+      codexInfos,
+      remoteBySession,
     );
 
     // 沒有 cwd 的舊紀錄（未識別專案）不算「別台電腦的」，維持在本機那一組。
     const isLocalPath = (cwd: string | undefined): boolean =>
       !cwd || fs.existsSync(cwd);
 
-    return groupSessionProjects(claudeProjects, topLevel, isLocalPath).map(
+    return groupSessionProjects(
+      claudeProjects,
+      topLevel,
+      isLocalPath,
+      (key) => refByCwdKey.get(key)?.id,
+    ).map(
       (project) => {
         const children: (ClaudeProjectNode | CodexProjectNode)[] =
           project.ai.map((ai) =>
@@ -627,6 +723,15 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
                   subsByHost,
                 },
           );
+        const sessionKeys = project.ai.flatMap((ai) =>
+          ai.tool === "claude"
+            ? ai.projects.flatMap((claudeProject) =>
+                claudeProject.sessionIds.map((id) => `claude:${id}`),
+              )
+            : collectCodexInfos(ai.sessions, subsByHost).map(
+                (info) => `codex:${info.backupId}`,
+              ),
+        );
         return {
           kind: "project",
           key: project.key,
@@ -634,17 +739,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           cwd: project.cwd,
           latestMtime: project.latestMtime,
           local: project.local,
-          backedUp: project.ai.some((ai) =>
-            ai.tool === "claude"
-              ? ai.projects.some((claudeProject) =>
-                  claudeProject.sessionIds.some((id) =>
-                    backedUpIds.has(`claude:${id}`),
-                  ),
-                )
-              : collectCodexInfos(ai.sessions, subsByHost).some((info) =>
-                  backedUpIds.has(`codex:${info.backupId}`),
-                ),
-          ),
+          backedUp: sessionKeys.some((key) => backedUpIds.has(key)),
+          projectRef: refByCwdKey.get(project.key),
+          strayCwdKeys: project.strayCwdKeys,
           children,
         };
       },
@@ -707,16 +804,4 @@ function checkbox(selected: boolean): vscode.TreeItemCheckboxState {
   return selected
     ? vscode.TreeItemCheckboxState.Checked
     : vscode.TreeItemCheckboxState.Unchecked;
-}
-
-function toolDirs(): { claude: string; codex: string } {
-  const cfg = getConfig();
-  return {
-    claude:
-      cfg.sources.find((s) => s.name === "claude")?.path ??
-      path.join(os.homedir(), ".claude"),
-    codex:
-      cfg.sources.find((s) => s.name === "codex")?.path ??
-      path.join(os.homedir(), ".codex"),
-  };
 }
