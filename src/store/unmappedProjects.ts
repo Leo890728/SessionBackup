@@ -25,7 +25,7 @@ export interface RemoteProject {
   /** 備份過它的機器，供側欄顯示來源。 */
   machines: string[];
   /**
-   * 這些對話本身。同步回來的 Codex 檔本機已經有了，只有逐一比對才分得出
+   * 這些對話本身。舊版直接匯入的 Codex 檔本機已經有了，只有逐一比對才分得出
    * 「遠端總共幾個」與「還有幾個沒下來」；而且列得出來，待匯入的那些才能
    * 在側欄展開、直接從 store 預覽，不必先把檔案搬進本機。
    */
@@ -43,10 +43,10 @@ export function remoteSessionKey(session: {
 /**
  * 聚合其他電腦 manifest 中出現過的專案。
  *
- * 兩種工具都要收。它們同步時的下場不同——Claude 解不出映射會被跳過（本機沒有檔案），
- * Codex 則照樣匯入、只是保留來源電腦的 cwd——但那是同一個專案的兩半。只收 Claude 的話，
- * 側欄會同時長出「待對應的 Claude 專案」和「cwd 不在本機的 Codex 專案」兩個節點；
- * 兩邊都收進來，呼叫端才有辦法用 project.id 把它們併回一個。
+ * 兩種工具都要收。現在兩邊解不出映射都一樣會被同步跳過（本機沒有檔案），但這道關卡
+ * 加上去之前匯入的 Codex 檔還留在本機、cwd 仍指著來源電腦。只收 Claude 的話，側欄會
+ * 同時長出「待對應的 Claude 專案」和「cwd 不在本機的 Codex 專案」兩個節點；兩邊都收
+ * 進來，呼叫端才有辦法用 project.id 把它們併回一個。
  */
 export function aggregateRemoteProjects(
   manifests: readonly MachineManifest[],

@@ -170,6 +170,19 @@ describe("previewHtml", () => {
     );
   });
 
+  it("drops 在對話開啟 when the conversation cannot be opened", () => {
+    const html = previewHtml(
+      transcript([]),
+      "n0",
+      {},
+      { status: "synced", openable: false }
+    );
+    assert.equal(html.includes('id="open-conversation"'), false);
+    assert.equal(html.includes("在對話開啟"), false);
+    // 重新整理照留：預覽本身照常可用。
+    assert.ok(html.includes('id="reload"'));
+  });
+
   it("shows native conversation actions regardless of sync status", () => {
     const synced = previewHtml(transcript([]), "n0", {}, { status: "synced" });
     assert.ok(synced.includes('id="reload" class="icon-button"'));

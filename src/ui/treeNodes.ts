@@ -24,7 +24,14 @@ export type PendingSessionNode = {
   file: string;
 };
 
-export type ClaudeProjectNode = {
+/**
+ * 這個節點畫在「未對應專案」那一層底下。整層都不給 checkbox，所以旗標要從專案
+ * 一路帶到對話——getTreeItem 拿到的是單一節點，看不到父節點是誰。
+ * 專案節點自己不必帶：它就是 local === false 的那些。
+ */
+type InUnmappedGroup = { inUnmappedGroup?: boolean };
+
+export type ClaudeProjectNode = InUnmappedGroup & {
   kind: "claudeProject";
   projectKey: string;
   projectLabel: string;
@@ -32,7 +39,7 @@ export type ClaudeProjectNode = {
   projects: ClaudeProject[];
 };
 
-export type CodexProjectNode = {
+export type CodexProjectNode = InUnmappedGroup & {
   kind: "codexProject";
   projectKey: string;
   projectLabel: string;
@@ -101,7 +108,7 @@ export type TreeNode =
   | CodexProjectNode
   | PendingAiNode
   | PendingSessionNode
-  | {
+  | (InUnmappedGroup & {
       kind: "session";
       info: SessionInfo;
       status: SessionSyncStatus;
@@ -110,7 +117,7 @@ export type TreeNode =
       /** 掃到疑似金鑰；側欄用警告圖示取代對話圖示。sessionBackup.secretScan 關掉時恆為 false。 */
       hasSecret?: boolean;
       subs?: TreeNode[];
-    }
+    })
   /** 遠端備份過、本機連檔案都還沒有的專案；點一下建立映射。本機已有檔案的那半
    *  併進 ProjectNode.unmapped，不會在這裡重複出現。 */
   | {
@@ -118,6 +125,12 @@ export type TreeNode =
       project: ProjectRef;
       count: number;
       machines: string[];
+      /**
+       * 這些對話本身，展開時依 AI 分層列出來。內容在本機備份庫的 store 裡，
+       * 所以還沒對應也讀得到——未對應的 Codex 對話被搬出 ~/.codex/sessions
+       * 之後，這是它們唯一的入口。
+       */
+      sessions: RemoteSession[];
       /** 撞名時消歧義過的標籤；沒撞名就沿用 project.displayName。 */
       label?: string;
     };

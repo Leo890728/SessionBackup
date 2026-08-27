@@ -24,7 +24,9 @@ export function registerBackupCommands(deps: CommandDeps): vscode.Disposable[] {
         const parts =
           `新增 ${summary.added}、更新 ${summary.updated}、保留本機 ${summary.keptLocal}、` +
           `相同 ${summary.identical}、跳過 ${summary.skipped}` +
-          (summary.deferred ? `、延後 ${summary.deferred}` : "");
+          (summary.deferred ? `、延後 ${summary.deferred}` : "") +
+          // 刪本機檔案的動作要講出來，不能只寫在 Output 裡。
+          (summary.evicted ? `、移出未對應 ${summary.evicted}` : "");
         const unmappedNote = summary.unmappedProjects.length
           ? `，另有 ${summary.unmappedProjects.length} 個專案（` +
             summary.unmappedProjects

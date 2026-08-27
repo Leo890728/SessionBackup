@@ -2,17 +2,29 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { runBackup } from "./backup";
+import {
+  candidateProjects,
+  EvictionResult,
+  evictUnmappedCodexSessions,
+} from "./evictUnmapped";
 import { upsertCodexSessionTitle } from "../agents/codexIndex";
 import { materializeCodexRevision, readCodexMetaCwd } from "../agents/codexLocalize";
+import { BackupConfig, getConfig, updateTrackedSessions } from "../config";
 import { ConflictRecord, ConflictRegistry } from "../store/conflicts";
-import { getConfig, updateTrackedSessions } from "../config";
 import { ProjectMappingRegistry } from "../store/projectMapping";
-import { applySessionRules, SelectionSet, SelectionTarget } from "../store/selection";
+import {
+  applySessionRules,
+  SelectionSet,
+  SelectionTarget,
+  sessionKey,
+} from "../store/selection";
 import { sessionDisplayName } from "../security/sessionSecretScan";
 import {
   classifyJsonlFiles,
   collectLocalSessions,
+  isRevisionStored,
   LocalSession,
+  MachineManifest,
   machineIdFromConfig,
   ManifestSession,
   ProjectRef,
@@ -21,6 +33,7 @@ import {
   revisionRelativePath,
   sourceForTool,
 } from "../store/sessionStore";
+import { remoteProjectsBySession } from "../store/unmappedProjects";
 import { ACTIVE_WINDOW_MS } from "../store/sessionStore";
 import { fileKey, newestRemoteFiles } from "../store/syncState";
 
@@ -41,7 +54,9 @@ export interface SyncSummary {
   conflicts: number;
   skipped: number;
   deferred: number;
-  /** 遠端有備份、但本機解不出位置的 Claude 專案；由 Sessions 側欄顯示成待對應節點。 */
+  /** 專案還沒對應、已經搬出 ~/.codex/sessions 的 Codex 對話數。 */
+  evicted: number;
+  /** 遠端有備份、但本機解不出位置的專案；由 Sessions 側欄顯示成待對應節點。 */
   unmappedProjects: ProjectRef[];
 }
 
@@ -90,6 +105,7 @@ export async function runSync(
     conflicts: 0,
     skipped: 0,
     deferred: 0,
+    evicted: 0,
     unmappedProjects: [],
   };
 
@@ -168,10 +184,19 @@ export async function runSync(
         continue;
       }
       if (candidate.session.tool === "codex") {
-        // 匯入時把 session_meta.cwd 本地化成這台電腦的專案路徑（找不到映射就保持原樣）。
         const mapping = candidate.session.project
           ? await projects.locateProject(candidate.session.project, false)
           : undefined;
+        if (candidate.session.project && !mapping) {
+          // 與 Claude 一視同仁：專案還沒對應就先不要落地到 ~/.codex/sessions。
+          // 內容已經在備份庫的 store 裡，側欄照樣列得出來也預覽得到；等使用者對應完，
+          // 下一輪同步才匯入，那時 cwd 一次就寫對，不必事後再補改。
+          unmapped.set(candidate.session.project.id, candidate.session.project);
+          summary.skipped++;
+          continue;
+        }
+        // 匯入時把 session_meta.cwd 本地化成這台電腦的專案路徑
+        //（來源機器上就解不出專案身分的對話沒有東西可對應，保持原樣直接匯入）。
         await materializeCodexRevision(remoteFile, target, mapping?.localPath);
       } else {
         await copyRevision(remoteFile, target);
@@ -249,10 +274,68 @@ export async function runSync(
     // 必須在下面補跑的備份之前寫回，匯入的對話才會進入本機 manifest。
     await updateTrackedSessions((current) => applySessionRules(current, adopted, true));
   }
-  if (summary.added || summary.updated) {
+  const evicted = await evictUnmapped(cfg, projects, localSessions, manifests, out);
+  summary.evicted = evicted.removed.length;
+  if (summary.added || summary.updated || summary.evicted) {
     await runBackup(out, interactive ? "manual" : "auto", projects);
   }
   return summary;
+}
+
+/**
+ * 這道關卡加上去之前匯入的未對應 Codex 檔還躺在 ~/.codex/sessions，工作目錄
+ * 指著別台電腦。內容已經在 store 裡了，把檔案清掉它們就變回「待匯入」，
+ * 對應完同步會帶回來、cwd 一次寫對。
+ *
+ * 擺在補跑備份之前：刪完要讓本機 manifest 跟著更新，否則它還宣稱這台電腦
+ * 有這些對話。評估的是這一輪開頭收集到的檔案——這一輪才下來的不必看，
+ * 未對應的現在根本不會落地。
+ */
+async function evictUnmapped(
+  cfg: BackupConfig,
+  projects: ProjectMappingRegistry,
+  localSessions: readonly LocalSession[],
+  manifests: readonly MachineManifest[],
+  out: vscode.OutputChannel
+): Promise<EvictionResult> {
+  const nothing: EvictionResult = { removed: [], orphanedIds: [] };
+  const codex = sourceForTool(cfg, "codex");
+  if (!codex) {
+    return nothing;
+  }
+  const remoteBySession = remoteProjectsBySession(
+    manifests,
+    machineIdFromConfig(cfg)
+  );
+  const unmappedProjectIds = new Set<string>();
+  for (const project of candidateProjects(localSessions, remoteBySession).values()) {
+    if (!(await projects.isMapped(project))) {
+      unmappedProjectIds.add(project.id);
+    }
+  }
+  if (!unmappedProjectIds.size) {
+    return nothing;
+  }
+  const result = await evictUnmappedCodexSessions(
+    codex.path,
+    {
+      localSessions,
+      remoteBySession,
+      unmappedProjectIds,
+      isStored: (session) => isRevisionStored(cfg.repoPath, session),
+      now: Date.now(),
+    },
+    (line) => out.appendLine(line)
+  );
+  if (result.removed.length) {
+    // 只拿掉這幾則的規則，不寫排除規則：排除會讓對應完的那一輪同步又跳過它們。
+    // 以 thread 為單位——同一個 id 還有別的檔案留在本機時規則得留著。
+    const stale = new Set(result.orphanedIds.map((id) => sessionKey("codex", id)));
+    await updateTrackedSessions((current) =>
+      current.filter((key) => !stale.has(key))
+    );
+  }
+  return result;
 }
 
 /** 使用者在比較視窗選「保留本機」後記住這個決定；遠端出現新 revision 才會再次成為衝突。 */

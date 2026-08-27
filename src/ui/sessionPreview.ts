@@ -27,9 +27,14 @@ const panels = new Map<
     status: SessionSyncStatus;
     sessionId: string;
     conversationCwd?: string;
+    openable: boolean;
   }
 >();
 
+/**
+ * openable 為 false 時不畫「在對話開啟」：專案還沒對應（本機沒有那個工作目錄），
+ * 或這份根本是備份庫裡的 revision，按下去只會跳警告。
+ */
 export async function showSessionPreview(
   tool: Tool,
   file: string,
@@ -38,6 +43,7 @@ export async function showSessionPreview(
   handoffStorageRoot: string,
   status: SessionSyncStatus,
   conversationCwd?: string,
+  openable = true,
 ): Promise<void> {
   const media = vscode.Uri.joinPath(extensionUri, "media");
   const assets = (webview: vscode.Webview) => ({
@@ -54,6 +60,7 @@ export async function showSessionPreview(
     existing.status = status;
     existing.sessionId = sessionId;
     existing.conversationCwd = conversationCwd;
+    existing.openable = openable;
     existing.panel.reveal(existing.panel.viewColumn, false);
     existing.panel.webview.html = previewHtml(
       await readTranscript(tool, file),
@@ -62,6 +69,7 @@ export async function showSessionPreview(
       {
         status: existing.status,
         backedUpRecords: await backedUpRecords(tool, file),
+        openable: existing.openable,
       },
     );
     return;
@@ -78,7 +86,7 @@ export async function showSessionPreview(
       localResourceRoots: [media],
     },
   );
-  const state = { panel, status, sessionId, conversationCwd };
+  const state = { panel, status, sessionId, conversationCwd, openable };
   panels.set(file, state);
   panel.onDidDispose(() => panels.delete(file));
   panel.webview.onDidReceiveMessage(async (message) => {
@@ -91,6 +99,7 @@ export async function showSessionPreview(
         {
           status: state.status,
           backedUpRecords: await backedUpRecords(tool, file),
+          openable: state.openable,
         },
       );
     } else if (
@@ -98,7 +107,7 @@ export async function showSessionPreview(
       typeof message.path === "string"
     ) {
       await openReferencedFile(message.path, message.line, transcript.cwd);
-    } else if (message?.command === "open-conversation") {
+    } else if (message?.command === "open-conversation" && state.openable) {
       await openSessionConversation(
         tool,
         state.sessionId,
@@ -114,6 +123,7 @@ export async function showSessionPreview(
     {
       status: state.status,
       backedUpRecords: await backedUpRecords(tool, file),
+      openable: state.openable,
     },
   );
 }

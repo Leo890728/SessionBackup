@@ -103,6 +103,48 @@ export async function upsertCodexSessionTitle(
     return false;
   }
 
+  await writeIndex(indexFile, lines);
+  return true;
+}
+
+/**
+ * 從索引移掉這些 thread 的標題。
+ *
+ * 對話檔被搬出 ~/.codex/sessions 之後索引還留著標題的話，Codex 自己會列出一則
+ * 打不開的對話。呼叫端要確定這個 id 底下已經沒有本機檔案——同一個 thread 可能
+ * 有多個 rollout 檔（resume／子代理），只搬走其中一個時標題還得留著。
+ */
+export async function removeCodexSessionTitles(
+  indexFile: string,
+  ids: ReadonlySet<string>
+): Promise<number> {
+  if (!ids.size) {
+    return 0;
+  }
+  let text: string;
+  try {
+    text = await fs.promises.readFile(indexFile, "utf8");
+  } catch {
+    return 0;
+  }
+  const lines = text.split(/\r?\n/).filter((line) => line.length > 0);
+  const kept = lines.filter((line) => {
+    try {
+      return !ids.has(JSON.parse(line)?.id);
+    } catch {
+      // 原樣保留無法解析的行。
+      return true;
+    }
+  });
+  const removed = lines.length - kept.length;
+  if (removed) {
+    await writeIndex(indexFile, kept);
+  }
+  return removed;
+}
+
+/** 先寫暫存檔再 rename：Codex 可能正在讀這個索引。 */
+async function writeIndex(indexFile: string, lines: string[]): Promise<void> {
   await fs.promises.mkdir(path.dirname(indexFile), { recursive: true });
   const content = lines.join("\n") + "\n";
   const temporary = `${indexFile}.${process.pid}.${Date.now()}.tmp`;
@@ -113,5 +155,4 @@ export async function upsertCodexSessionTitle(
     await fs.promises.writeFile(indexFile, content, "utf8");
     await fs.promises.rm(temporary, { force: true });
   }
-  return true;
 }

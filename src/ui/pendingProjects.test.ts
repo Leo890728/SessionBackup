@@ -145,6 +145,13 @@ describe("splitPendingProjects", () => {
       pending.map((node) => node.kind),
       ["unmappedProject"]
     );
+    // 對話要跟著節點走：本機一個檔案都沒有時，這是讀到它們的唯一入口。
+    const node = pending[0];
+    assert.deepEqual(
+      node.kind === "unmappedProject" &&
+        node.sessions.map((session) => session.id),
+      remote(GIS).sessions.map((session) => session.id)
+    );
   });
 
   it("leaves an unresolvable local project alone when nothing pending matches", () => {

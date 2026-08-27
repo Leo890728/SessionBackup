@@ -384,6 +384,7 @@ async function autoSync(
     out.appendLine(
       `[${new Date().toLocaleString()}] 自動同步：新增 ${summary.added}、更新 ${summary.updated}、` +
         `保留本機 ${summary.keptLocal}、衝突 ${summary.conflicts}、延後 ${summary.deferred}` +
+        (summary.evicted ? `、移出未對應 ${summary.evicted}` : "") +
         (summary.unmappedProjects.length
           ? `、待對應專案 ${summary.unmappedProjects.length}（` +
             summary.unmappedProjects

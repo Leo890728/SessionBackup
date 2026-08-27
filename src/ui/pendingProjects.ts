@@ -14,9 +14,9 @@ export interface PendingSplit {
 /**
  * 同一個專案不能在側欄出現兩次。
  *
- * 一個專案在別台電腦用過 Claude 也用過 Codex 時，同步的下場是分開的：Claude 解不出
- * 映射會被跳過，只留在遠端 manifest 裡；Codex 照樣匯入本機，只是 cwd 還指著來源電腦。
- * 於是同一個專案會生出兩個節點——一個來自 unmapped 清單、一個來自本機檔案。
+ * 專案還沒對應時，兩種工具現在都只留在遠端 manifest 裡；但這道關卡加上去之前匯入的
+ * Codex 檔還在本機，cwd 指著來源電腦。於是同一個專案可能生出兩個節點——一個來自
+ * unmapped 清單、一個來自本機檔案。
  * 這裡用 remoteProject.id 把兩邊對起來：對得上就把待對應資訊掛回本機那個節點
  * （使用者才有得點），遠端那筆不再另外長節點。
  */
@@ -45,8 +45,8 @@ export function splitPendingProjects(
       continue;
     }
     claimed.add(match.project.id);
-    // 遠端的對話多半已經同步到本機了（Codex 不會被跳過），只有還沒下來的那些
-    // 值得提。一個都不缺時不設這個欄位，提示改講「工作目錄還指著來源電腦」。
+    // 只有還沒下來的那些值得提。一個都不缺（舊版就已經匯入的 Codex 檔）時不設這個
+    // 欄位，提示改講「工作目錄還指著來源電腦」。
     const missing = match.sessions.filter(
       (session) => !localKeys.has(remoteSessionKey(session))
     );
@@ -66,6 +66,7 @@ export function splitPendingProjects(
       project: entry.project,
       count: entry.count,
       machines: entry.machines,
+      sessions: [...entry.sessions],
     });
   }
 

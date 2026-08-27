@@ -10,6 +10,7 @@ import {
   showSessionPreview,
 } from "../ui/sessionPreview";
 import { TreeNode } from "../ui/treeNodes";
+import { inUnmappedGroup } from "../ui/treeSelection";
 import { ChangedSessionNode } from "../ui/repositoryTree";
 import { ProjectMappingRegistry } from "../store/projectMapping";
 import { Tool } from "../agents/types";
@@ -24,6 +25,11 @@ async function conversationTarget(
   projects: ProjectMappingRegistry,
 ): Promise<{ tool: Tool; sessionId: string; cwd?: string } | undefined> {
   if (node?.kind === "session") {
+    // 未對應專案底下的對話開不起來。選單已經不掛這個指令，這裡是第二道：
+    // 指令仍可能從別的路徑被叫到，讓它安靜結束比跳警告好。
+    if (inUnmappedGroup(node)) {
+      return undefined;
+    }
     return {
       tool: node.info.tool,
       sessionId:
@@ -74,6 +80,9 @@ export function registerSessionsCommands(deps: CommandDeps): vscode.Disposable[]
             context.extensionUri,
             context.globalStorageUri.fsPath,
             "synced",
+            undefined,
+            // 檔案還不在 ~/.claude／~/.codex，AI 那邊開不出這份對話。
+            false,
           );
           return;
         }
@@ -88,6 +97,8 @@ export function registerSessionsCommands(deps: CommandDeps): vscode.Disposable[]
           context.globalStorageUri.fsPath,
           node.status,
           node.conversationCwd,
+          // 專案還沒對應：本機沒有那個工作目錄，開了也只會跳警告。
+          !inUnmappedGroup(node),
         );
       },
     ),

@@ -166,3 +166,28 @@ export function flattenSessions(nodes: TreeNode[]): SessionInfo[] {
 }
 
 export const PARTIAL_TIP = "部分追蹤：底下的對話只勾了一部分。\n\n";
+
+/** 未對應專案底下三層共用的說明，取代原本講勾選規則的那段。 */
+export const UNMAPPED_TIP =
+  "這個專案在本機還沒有對應的資料夾，不能勾選備份——" +
+  "現在備份上去的工作目錄仍然是別台電腦的路徑。\n\n";
+
+/**
+ * 這個節點畫在「未對應專案」那一層底下。整層都不給 checkbox：對應完之前勾了，
+ * 送上去的也只是別台電腦的路徑，或是一個已經不存在的資料夾。
+ *
+ * 專案節點看 local——splitPendingProjects 分堆的依據就是它；底下的 AI 與對話
+ * 節點沒有 local 可看，靠建節點時一路帶下來的旗標。
+ */
+export function inUnmappedGroup(node: TreeNode): boolean {
+  switch (node.kind) {
+    case "project":
+      return !node.local;
+    case "claudeProject":
+    case "codexProject":
+    case "session":
+      return node.inUnmappedGroup === true;
+    default:
+      return false;
+  }
+}

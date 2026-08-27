@@ -185,7 +185,7 @@
         },
         {
           "command": "sessionBackup.openConversation",
-          "when": "view == sessionBackup.sessions && viewItem =~ /^session/",
+          "when": "view == sessionBackup.sessions && viewItem =~ /^session(Selected|Unselected)$/",
           "group": "inline"
         },
         {
@@ -200,7 +200,7 @@
         },
         {
           "command": "sessionBackup.openConversation",
-          "when": "view == sessionBackup.sessions && viewItem =~ /^session/",
+          "when": "view == sessionBackup.sessions && viewItem =~ /^session(Selected|Unselected)$/",
           "group": "2_export@0"
         },
         {

@@ -48,10 +48,12 @@ import {
   collectCodexInfos,
   flattenSessions,
   groupDescription,
+  inUnmappedGroup,
   PARTIAL_TIP,
   projectSelectionTip,
   ruleFor,
   selectionSummary,
+  UNMAPPED_TIP,
 } from "./treeSelection";
 
 export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
@@ -321,13 +323,15 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
                   "Codex 自己那邊也會用那個路徑列出它們。\n\n" +
                   "指定它在本機的位置，就會一併改成本機路徑。\n\n"
                 : "這個工作目錄在本機不存在——多半是從其他電腦同步回來的對話，" +
-                  "也可能是資料夾已被移動或刪除。對話仍可瀏覽與勾選。\n\n") +
+                  "也可能是資料夾已被移動或刪除。對話仍可瀏覽。\n\n") +
           (chosen === 0 && n.backedUp
             ? "雲端備份庫裡已經有這個專案的對話（圖示右下角的雲）；" +
               "取消追蹤只是不再更新，既有備份不會被刪除。\n\n"
             : "") +
-          (partial ? PARTIAL_TIP : "") +
-          projectSelectionTip(n.children);
+          // 未對應那一層不給勾，講勾選規則只會誤導；改講為什麼不能勾。
+          (n.local
+            ? (partial ? PARTIAL_TIP : "") + projectSelectionTip(n.children)
+            : UNMAPPED_TIP);
         // 已追蹤走 ThemeIcon.Folder：它屬於 file-kind，VS Code 會交給使用者的檔案圖示
         // 佈景主題畫，也就是實心那顆。未追蹤要「線框且變暗」——單靠 ThemeIcon 做不到
         // （拿掉 resourceUri 才會退回線框 codicon，但變暗也是 resourceUri 帶來的），
@@ -346,12 +350,15 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           chosen === 0 ? "unselected" : "synced",
           `project:${n.key}`,
         );
-        // 可以對應的專案多一個 contextValue 前綴，menus 才掛得上「對應到本機資料夾」；
-        // 尾綴維持 Selected/Unselected，勾選那組選單的 when 條件不受影響。
+        // 前綴決定 menus 掛不掛得上「對應到本機資料夾」；尾綴 Selected/Unselected
+        // 則是右鍵那組勾選指令的 when 條件——未對應時連同 checkbox 一起拿掉，
+        // 否則只是把方塊藏起來、右鍵仍然繞得過去。
         item.contextValue =
-          (n.projectRef && n.strayCwdKeys.length ? "projectUnmapped" : "project") +
-          (selected ? "Selected" : "Unselected");
-        item.checkboxState = checkbox(selected);
+          n.projectRef && n.strayCwdKeys.length ? "projectUnmapped" : "project";
+        if (n.local) {
+          item.contextValue += selected ? "Selected" : "Unselected";
+          item.checkboxState = checkbox(selected);
+        }
         return item;
       }
       case "claudeProject": {
@@ -365,20 +372,24 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         item.description = groupDescription(total, chosen, selected, partial);
         item.tooltip =
           (n.cwd ? `工作目錄:${n.cwd}\n\n` : "") +
-          (partial
-            ? PARTIAL_TIP +
-              "勾選以備份這個專案的所有 Claude Code 對話（含之後新增的）"
-            : selected
-              ? "已勾選這個專案的 Claude Code：現有與之後新增的對話都會備份"
-              : "勾選以備份這個專案的所有 Claude Code 對話（含之後新增的）");
+          (inUnmappedGroup(n)
+            ? UNMAPPED_TIP
+            : partial
+              ? PARTIAL_TIP +
+                "勾選以備份這個專案的所有 Claude Code 對話（含之後新增的）"
+              : selected
+                ? "已勾選這個專案的 Claude Code：現有與之後新增的對話都會備份"
+                : "勾選以備份這個專案的所有 Claude Code 對話（含之後新增的）");
         item.iconPath = vscode.Uri.joinPath(
           this.extensionUri,
           "media",
           "claude.png",
         );
         item.resourceUri = dimmedUri(chosen === 0, `${n.projectKey}:claude`);
-        item.contextValue = selected ? "aiSelected" : "aiUnselected";
-        item.checkboxState = checkbox(selected);
+        item.contextValue = aiContextValue(n, selected);
+        if (!inUnmappedGroup(n)) {
+          item.checkboxState = checkbox(selected);
+        }
         return item;
       }
       case "codexProject": {
@@ -392,16 +403,20 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         item.description = groupDescription(total, chosen, selected, partial);
         item.tooltip =
           (n.cwd ? `工作目錄:${n.cwd}\n\n` : "這些對話沒有記錄工作目錄。\n\n") +
-          (partial ? PARTIAL_TIP : "") +
-          "勾選以備份這個專案目前的所有 Codex 對話（不含之後新增的）";
+          (inUnmappedGroup(n)
+            ? UNMAPPED_TIP
+            : (partial ? PARTIAL_TIP : "") +
+              "勾選以備份這個專案目前的所有 Codex 對話（不含之後新增的）");
         item.iconPath = vscode.Uri.joinPath(
           this.extensionUri,
           "media",
           "codex.png",
         );
         item.resourceUri = dimmedUri(chosen === 0, `${n.projectKey}:codex`);
-        item.contextValue = selected ? "aiSelected" : "aiUnselected";
-        item.checkboxState = checkbox(selected);
+        item.contextValue = aiContextValue(n, selected);
+        if (!inUnmappedGroup(n)) {
+          item.checkboxState = checkbox(selected);
+        }
         return item;
       }
       case "session": {
@@ -429,6 +444,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           (n.hasSecret
             ? "⚠ 掃到疑似金鑰：備份時若還沒送出去的新內容含金鑰，會逐一跟你確認。\n\n"
             : "") +
+          (inUnmappedGroup(n) ? UNMAPPED_TIP : "") +
           `狀態:${display.label} — ${display.detail}\n\n` +
           (partial ? `子 sessions ${PARTIAL_TIP}` : "") +
           (s.subagent ? `子代理:${s.subagent}\n` : "") +
@@ -436,8 +452,16 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           `${s.file}\n` +
           (s.cwd ? `工作目錄:${s.cwd}\n` : "") +
           `${(s.size / 1024).toFixed(0)} KB，最後更新 ${s.date} ${s.time}`;
-        item.contextValue = selected ? "sessionSelected" : "sessionUnselected";
-        item.checkboxState = checkbox(selected);
+        // 未對應時只留 "session" 前綴：開啟/匯出那組選單看的是前綴，照常可用；
+        // 勾選那組看的是 Selected/Unselected 尾綴，跟著 checkbox 一起消失。
+        item.contextValue = inUnmappedGroup(n)
+          ? "session"
+          : selected
+            ? "sessionSelected"
+            : "sessionUnselected";
+        if (!inUnmappedGroup(n)) {
+          item.checkboxState = checkbox(selected);
+        }
         // 狀態走 FileDecorationProvider（列尾的 U/M 字母），圖示就退回中性的對話符號，
         // 兩邊都畫狀態只會互相打架。
         item.resourceUri = sessionStatusUri(n.status, s.file);
@@ -524,7 +548,9 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
       case "unmappedProject": {
         const item = new vscode.TreeItem(
           n.label ?? n.project.displayName,
-          vscode.TreeItemCollapsibleState.None,
+          n.sessions.length
+            ? vscode.TreeItemCollapsibleState.Collapsed
+            : vscode.TreeItemCollapsibleState.None,
         );
         item.id = `unmapped:${n.project.id}`;
         item.description = `${n.count} 個對話 · 待對應`;
@@ -532,7 +558,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           `${n.project.displayName}\n\n` +
           `其他電腦（${n.machines.join("、")}）備份過這個專案的 ${n.count} 個對話，` +
           "但本機找不到對應的資料夾。\n\n" +
-          "點一下選擇這個專案在本機的位置，之後就會自動同步。";
+          "點一下選擇這個專案在本機的位置，之後就會自動同步。\n\n" +
+          "展開可以先讀它們——內容已經在本機備份庫裡了。";
         // 沒有 checkboxState：還沒有本機檔案可勾，對應完才會長成一般的專案節點。
         item.iconPath = new vscode.ThemeIcon(
           "cloud",
@@ -573,7 +600,15 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     if (el.kind === "project") {
       // 還沒匯入的那一半排在本機的後面：它們沒有 checkbox，混在前面會讓
       // 整個專案看起來像是不能勾。
-      return [...el.children, ...pendingAiNodes(el)];
+      return [...el.children, ...pendingAiNodes(el.label, el.unmapped)];
+    }
+    if (el.kind === "unmappedProject") {
+      // 本機一個檔案都沒有，底下全是待匯入的——包括被搬出 ~/.codex/sessions
+      // 的那些。內容在備份庫裡，對應之前就讀得到。
+      return pendingAiNodes(el.label ?? el.project.displayName, {
+        machines: el.machines,
+        sessions: el.sessions,
+      });
     }
     if (el.kind === "pendingAi") {
       const repoPath = getConfig().repoPath;
@@ -612,6 +647,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           info,
           claudeProjectDir: projectDir,
           conversationCwd: el.cwd,
+          inUnmappedGroup: el.inUnmappedGroup,
           hasSecret: secrets.has(info.file),
           status: await resolveSessionStatus(lookup, {
             tool: info.tool,
@@ -644,6 +680,11 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
     }
     if (node.kind === "unmappedProject") {
       // 本機還沒有檔案，沒有可套用的選取規則；對應完成後才會出現一般的專案節點。
+      return;
+    }
+    if (inUnmappedGroup(node)) {
+      // 未對應專案底下整層都不給勾。這裡是 checkbox 與右鍵指令共用的入口，
+      // 擋在這一層，畫面上少掉的方塊才不會被別的路徑繞過去。
       return;
     }
     if (node.kind === "project") {
@@ -829,6 +870,8 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
                   projectKey: project.key,
                   projectLabel: project.label,
                   cwd: project.cwd,
+                  // 專案排進「未對應」那一層時，整層都不給勾——旗標得跟著子節點走。
+                  inUnmappedGroup: !project.local,
                   projects: ai.projects,
                 }
               : {
@@ -836,6 +879,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
                   projectKey: project.key,
                   projectLabel: project.label,
                   cwd: project.cwd,
+                  inUnmappedGroup: !project.local,
                   codexRoot: dirs.codex,
                   topLevel: ai.sessions,
                   subsByHost,
@@ -906,6 +950,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
         info,
         status: statusByFile.get(info.file) ?? "unbacked",
         hasSecret: secrets.has(info.file),
+        inUnmappedGroup: node.inUnmappedGroup,
         subs: nested?.length ? nested : undefined,
       };
     };
@@ -935,9 +980,16 @@ const TOOL_LABEL: Record<Tool, string> = {
   codex: "Codex",
 };
 
-/** 還沒匯入的那些對話依 AI 分層，與本機的 claudeProject／codexProject 並排。 */
-function pendingAiNodes(node: ProjectNode): PendingAiNode[] {
-  const pending = node.unmapped;
+/**
+ * 還沒匯入的那些對話依 AI 分層。本機有檔案的專案底下與 claudeProject／
+ * codexProject 並排；本機一個檔案都沒有的專案（待對應節點）則是全部。
+ */
+function pendingAiNodes(
+  projectLabel: string,
+  pending:
+    | { machines: string[]; sessions: readonly RemoteSession[] }
+    | undefined,
+): PendingAiNode[] {
   if (!pending) {
     return [];
   }
@@ -945,7 +997,7 @@ function pendingAiNodes(node: ProjectNode): PendingAiNode[] {
     .map((tool) => ({
       kind: "pendingAi" as const,
       tool,
-      projectLabel: node.label,
+      projectLabel,
       machines: pending.machines,
       sessions: pending.sessions.filter((session) => session.tool === tool),
     }))
@@ -956,6 +1008,17 @@ function pendingAiNodes(node: ProjectNode): PendingAiNode[] {
 function pendingTools(sessions: readonly { tool: Tool }[]): Tool[] {
   const tools = new Set(sessions.map((session) => session.tool));
   return (["claude", "codex"] as const).filter((tool) => tools.has(tool));
+}
+
+/** AI 節點的 contextValue。未對應時不掛尾綴，右鍵那組勾選指令就不會出現。 */
+function aiContextValue(
+  node: ClaudeProjectNode | CodexProjectNode,
+  selected: boolean,
+): string {
+  if (inUnmappedGroup(node)) {
+    return "ai";
+  }
+  return selected ? "aiSelected" : "aiUnselected";
 }
 
 function checkbox(selected: boolean): vscode.TreeItemCheckboxState {

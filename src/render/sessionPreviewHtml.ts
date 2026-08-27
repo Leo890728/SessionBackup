@@ -23,6 +23,12 @@ export interface PreviewState {
    * 紀錄產生的訊息之前；沒給就當作 0，也就是整份都算新的。
    */
   backedUpRecords?: number;
+  /**
+   * 這份對話能不能在 AI 那邊開起來。專案還沒對應時不行——本機沒有那個工作目錄；
+   * 待匯入的更是連檔案都不在 ~/.claude／~/.codex 裡，讀的是備份庫裡的 revision。
+   * 這種時候「在對話開啟」只會跳警告，不如不要出現。沒給就當作可以開。
+   */
+  openable?: boolean;
 }
 
 /**
@@ -69,7 +75,10 @@ export function previewHtml(
     state?.backedUpRecords ?? 0
   );
   const rail = questionRailHtml(questions) + currentQuestionHtml(questions);
-  const openConversationButton = `<button id="open-conversation" class="conversation-button" type="button" title="在 ${toolName} 開啟此 session">在對話開啟</button>`;
+  const openConversationButton =
+    state?.openable === false
+      ? ""
+      : `<button id="open-conversation" class="conversation-button" type="button" title="在 ${toolName} 開啟此 session">在對話開啟</button>`;
 
   return `<!doctype html>
 <html lang="zh-Hant">

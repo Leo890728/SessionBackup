@@ -8,6 +8,7 @@ import {
   collectCodexInfos,
   flattenSessions,
   groupDescription,
+  inUnmappedGroup,
   projectSelectionTip,
   ruleFor,
   selectionSummary,
@@ -247,5 +248,54 @@ describe("ruleFor", () => {
       claudeProjectDir: "proj",
     } as unknown as Extract<TreeNode, { kind: "session" }>;
     assert.equal(ruleFor(node).target.claudeProjectDir, "proj");
+  });
+});
+
+describe("inUnmappedGroup", () => {
+  const project = (local: boolean) =>
+    ({
+      kind: "project",
+      key: "p",
+      label: "p",
+      local,
+      backedUp: false,
+      latestMtime: 0,
+      strayCwdKeys: [],
+      sessionKeys: [],
+      children: [],
+    }) as TreeNode;
+
+  it("counts a project as unmapped exactly when its cwd is not on this machine", () => {
+    assert.equal(inUnmappedGroup(project(false)), true);
+    assert.equal(inUnmappedGroup(project(true)), false);
+  });
+
+  it("reads the flag carried down to AI and session nodes", () => {
+    assert.equal(
+      inUnmappedGroup({ ...codexNode([]), inUnmappedGroup: true }),
+      true,
+    );
+    assert.equal(inUnmappedGroup(codexNode([])), false);
+    assert.equal(
+      inUnmappedGroup({
+        kind: "session",
+        info: info("s"),
+        status: "unbacked",
+        inUnmappedGroup: true,
+      } as TreeNode),
+      true,
+    );
+  });
+
+  it("leaves the pending nodes alone: they never had a checkbox to remove", () => {
+    assert.equal(
+      inUnmappedGroup({
+        kind: "unmappedProject",
+        project: { id: "x", displayName: "x" },
+        count: 1,
+        machines: ["m"],
+      } as TreeNode),
+      false,
+    );
   });
 });
