@@ -273,10 +273,11 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           (n.local
             ? ""
             : n.unmapped
-              ? `其他電腦（${n.unmapped.machines.join("、")}）備份過這個專案的 ` +
-                `${n.unmapped.count} 個對話，但本機找不到對應的資料夾。\n\n` +
-                "指定它在本機的位置後，還沒匯入的對話會自動同步回來，" +
-                "本機這些對話的工作目錄也會一併改成本機路徑。\n\n"
+              ? `其他電腦（${n.unmapped.machines.join("、")}）還有這個專案的 ` +
+                `${n.unmapped.count} 個對話沒有進到本機——同步時解不出這個專案` +
+                "在這台電腦的位置就跳過了。\n\n" +
+                "指定它在本機的位置後，那些對話會自動同步回來，" +
+                "已經在本機的對話也會把工作目錄改成本機路徑。\n\n"
               : n.projectRef
                 ? "這些對話是從其他電腦同步回來的，工作目錄還指著來源電腦——" +
                   "Codex 自己那邊也會用那個路徑列出它們。\n\n" +
@@ -742,6 +743,7 @@ export class SessionTreeProvider implements vscode.TreeDataProvider<TreeNode> {
           backedUp: sessionKeys.some((key) => backedUpIds.has(key)),
           projectRef: refByCwdKey.get(project.key),
           strayCwdKeys: project.strayCwdKeys,
+          sessionKeys,
           children,
         };
       },

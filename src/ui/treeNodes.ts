@@ -46,8 +46,12 @@ export type ProjectNode = {
    * 要改寫檔案才算真的修好。有值且有 projectRef 時列尾才出現 🔗。
    */
   strayCwdKeys: string[];
+  /** 這個節點底下每個對話的 `tool:id`，用來比對遠端還有哪些沒下來。 */
+  sessionKeys: string[];
   /**
-   * 遠端還有這個專案的對話沒進到本機（多半是同步時被跳過的 Claude 對話）。
+   * 遠端還有這個專案的對話沒進到本機（多半是同步時被跳過的 Claude 對話），
+   * count 只算還沒下來的那些。全部都下來了就沒有這個欄位。
+   *
    * 只影響提示文字——🔗 看的是 strayCwdKeys，因為「已經對應過、只剩 Codex
    * 的 cwd 沒改過來」的專案不會出現在待對應清單裡，卻同樣需要修。
    */

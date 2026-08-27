@@ -20,17 +20,19 @@ function projectNode(over: Partial<ProjectNode> = {}): ProjectNode {
     local: false,
     backedUp: true,
     strayCwdKeys: ["windows:c:\\dev\\gis"],
+    sessionKeys: [],
     children: [],
     ...over,
   };
 }
 
+/** 預設遠端這幾個對話本機都還沒有，所以 count 就是「還沒下來的數量」。 */
 function remote(
   project: RemoteProject["project"],
-  count = 3,
+  sessionKeys = ["codex:r1", "codex:r2", "claude:r3"],
   machines = ["A"]
 ): RemoteProject {
-  return { project, count, machines };
+  return { project, count: sessionKeys.length, machines, sessionKeys };
 }
 
 describe("splitPendingProjects", () => {
@@ -46,7 +48,7 @@ describe("splitPendingProjects", () => {
     // （只在遠端 manifest 裡）以前會變成兩個節點。
     const { pending } = splitPendingProjects(
       [projectNode({ projectRef: GIS })],
-      [remote(GIS, 4, ["A", "C"])]
+      [remote(GIS, ["codex:r1", "codex:r2", "claude:r3", "claude:r4"], ["A", "C"])]
     );
     assert.equal(pending.length, 1);
     const [node] = pending;
@@ -56,6 +58,40 @@ describe("splitPendingProjects", () => {
     assert.deepEqual(
       node.kind === "project" ? node.unmapped?.machines : undefined,
       ["A", "C"]
+    );
+  });
+
+  it("counts only the conversations that are not on this machine yet", () => {
+    // Codex 同步時不會被跳過，那些對話早就在本機了。把遠端總數寫進提示會和
+    // 節點自己標的對話數對不起來——ECHA 標「19 個對話」卻說「備份過 11 個」。
+    const { pending } = splitPendingProjects(
+      [
+        projectNode({
+          projectRef: GIS,
+          sessionKeys: ["codex:r1", "codex:r2"],
+        }),
+      ],
+      [remote(GIS, ["codex:r1", "codex:r2", "claude:r3"])]
+    );
+    assert.equal(pending[0].kind === "project" && pending[0].unmapped?.count, 1);
+  });
+
+  it("says nothing about pending conversations when they are all here", () => {
+    // 只剩工作目錄要修的情況：提示該講那件事，不是「還有 N 個沒下來」。
+    const { pending } = splitPendingProjects(
+      [
+        projectNode({
+          projectRef: GIS,
+          sessionKeys: ["codex:r1", "codex:r2"],
+        }),
+      ],
+      [remote(GIS, ["codex:r1", "codex:r2"])]
+    );
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0].kind === "project" && pending[0].unmapped, undefined);
+    assert.equal(
+      pending[0].kind === "project" && pending[0].projectRef?.id,
+      GIS.id
     );
   });
 

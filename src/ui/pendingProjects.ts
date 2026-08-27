@@ -24,6 +24,8 @@ export function splitPendingProjects(
   unmapped: readonly RemoteProject[]
 ): PendingSplit {
   const byId = new Map(unmapped.map((entry) => [entry.project.id, entry]));
+  // 全部專案一起算：同步回來的對話可能被歸到別的節點底下，仍然算「已經在本機」。
+  const localKeys = new Set(projects.flatMap((project) => project.sessionKeys));
   const claimed = new Set<string>();
   const pending: TreeNode[] = [];
   const mapped: ProjectNode[] = [];
@@ -42,10 +44,14 @@ export function splitPendingProjects(
       continue;
     }
     claimed.add(match.project.id);
-    pending.push({
-      ...project,
-      unmapped: { count: match.count, machines: match.machines },
-    });
+    // 遠端的對話多半已經同步到本機了（Codex 不會被跳過），只有還沒下來的那些
+    // 值得提。一個都不缺時不設這個欄位，提示改講「工作目錄還指著來源電腦」。
+    const missing = match.sessionKeys.filter((key) => !localKeys.has(key)).length;
+    pending.push(
+      missing
+        ? { ...project, unmapped: { count: missing, machines: match.machines } }
+        : project
+    );
   }
 
   for (const entry of unmapped) {

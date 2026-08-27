@@ -8,6 +8,12 @@ export interface RemoteProject {
   count: number;
   /** 備份過它的機器，供側欄顯示來源。 */
   machines: string[];
+  /**
+   * 這些 session 的 `tool:id`。同步回來的 Codex 檔本機已經有了，只有逐一比對
+   * 才分得出「遠端總共幾個」與「還有幾個沒下來」——兩個數字差很多時直接寫總數
+   * 會和節點自己標的對話數對不起來。
+   */
+  sessionKeys: string[];
 }
 
 /**
@@ -44,7 +50,7 @@ export function aggregateRemoteProjects(
         ids: new Set<string>(),
         machines: new Set<string>(),
       };
-      entry.ids.add(session.id);
+      entry.ids.add(`${session.tool}:${session.id}`);
       entry.machines.add(manifest.machineId);
       byProject.set(session.project.id, entry);
     }
@@ -54,6 +60,7 @@ export function aggregateRemoteProjects(
       project,
       count: ids.size,
       machines: [...machines].sort(),
+      sessionKeys: [...ids],
     }))
     .sort((a, b) => a.project.displayName.localeCompare(b.project.displayName));
 }
