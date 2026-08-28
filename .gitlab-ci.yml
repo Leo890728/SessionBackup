@@ -1,11 +1,15 @@
 # Auto-build the .vsix on every push / MR, and attach it to a GitLab Release on v* tags.
 #
-# Runs on a dedicated Docker-executor runner registered against this project on the
-# self-managed GitLab (10.0.10.31), living on the 10.0.10.103 Hyper-V VM's Docker Engine.
-# Register that runner with:
-#   - tag `session-backup` (jobs below are pinned to it via `default: tags`)
-#   - executor: docker, and outbound internet allowed (needs Docker Hub, npmjs.org, gitlab.com)
-#   - do NOT reuse the air-gapped `security-offline` runner from secure_CI_pipeline.
+# Runs on a dedicated Docker-executor runner (tag `session-backup`) on the Hyper-V VM
+# 10.0.10.104 (host 10.0.10.103). Register it against http://10.0.10.31 and set
+#   clone_url = "http://10.0.10.31"
+# in config.toml so jobs clone straight from GitLab instead of the gitlab.synct.com.tw
+# proxy (which rejects the CI job token). The runner needs outbound internet
+# (Docker Hub, npmjs.org, registry.gitlab.com). Do NOT reuse the air-gapped
+# `security-offline` runner from secure_CI_pipeline.
+#
+# Node 22: the test script uses `node --test "out/**/*.test.js"`, whose glob support
+# needs Node >= 22.
 
 stages:
   - test
@@ -13,7 +17,7 @@ stages:
   - release
 
 default:
-  image: node:20
+  image: node:22
   tags:
     - session-backup
   cache:

@@ -78,15 +78,30 @@ describe("Claude conversation window handoff", () => {
         "C:\\work\\project",
       );
       assert.equal(
-        await takeClaudeConversationHandoff(root, "C:\\work\\other"),
+        await takeClaudeConversationHandoff(
+          root,
+          "C:\\work\\other",
+          undefined,
+          "win32",
+        ),
         undefined,
       );
       assert.deepEqual(
-        await takeClaudeConversationHandoff(root, "c:\\WORK\\project"),
+        await takeClaudeConversationHandoff(
+          root,
+          "c:\\WORK\\project",
+          undefined,
+          "win32",
+        ),
         { sessionId: "session-id", cwd: "C:\\work\\project" },
       );
       assert.equal(
-        await takeClaudeConversationHandoff(root, "C:\\work\\project"),
+        await takeClaudeConversationHandoff(
+          root,
+          "C:\\work\\project",
+          undefined,
+          "win32",
+        ),
         undefined,
       );
     } finally {

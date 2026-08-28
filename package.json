@@ -401,7 +401,7 @@
   },
   "scripts": {
     "compile": "tsc -p ./",
-    "test": "npm run compile && node --test out/**/*.test.js",
+    "test": "npm run compile && node --test \"out/**/*.test.js\"",
     "backup:local": "npm run compile && node out/tools/rebuildLocal.js",
     "watch": "tsc -w -p ./",
     "vscode:prepublish": "npm run compile",

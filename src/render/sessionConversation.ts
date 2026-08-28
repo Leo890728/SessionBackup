@@ -115,6 +115,7 @@ export async function takeClaudeConversationHandoff(
   storageRoot: string,
   workspaceCwd: string | undefined,
   now = Date.now(),
+  platform: NodeJS.Platform = process.platform,
 ): Promise<{ sessionId: string; cwd: string } | undefined> {
   const file = path.join(storageRoot, CLAUDE_HANDOFF_FILE);
   let value: unknown;
@@ -135,7 +136,7 @@ export async function takeClaudeConversationHandoff(
     await removeHandoff(file);
     return undefined;
   }
-  if (!sameConversationWorkspace(value.cwd, workspaceCwd)) {
+  if (!sameConversationWorkspace(value.cwd, workspaceCwd, platform)) {
     return undefined;
   }
 
