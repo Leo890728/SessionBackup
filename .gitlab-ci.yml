@@ -1,8 +1,11 @@
 # Auto-build the .vsix on every push / MR, and attach it to a GitLab Release on v* tags.
-# Prerequisites on the GitLab instance:
-#   - a runner that can run Docker images (executor: docker)
-#   - the runner can pull `node:20` and `registry.gitlab.com/gitlab-org/release-cli`
-#     (on an air-gapped instance, mirror those images and point `image:` at the mirror)
+#
+# Runs on a dedicated Docker-executor runner registered against this project on the
+# self-managed GitLab (10.0.10.31), living on the 10.0.10.103 Hyper-V VM's Docker Engine.
+# Register that runner with:
+#   - tag `session-backup` (jobs below are pinned to it via `default: tags`)
+#   - executor: docker, and outbound internet allowed (needs Docker Hub, npmjs.org, gitlab.com)
+#   - do NOT reuse the air-gapped `security-offline` runner from secure_CI_pipeline.
 
 stages:
   - test
@@ -11,6 +14,8 @@ stages:
 
 default:
   image: node:20
+  tags:
+    - session-backup
   cache:
     key:
       files:
@@ -58,7 +63,7 @@ release:
   needs:
     - job: package
       artifacts: true
-  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  image: registry.gitlab.com/gitlab-org/release-cli:v0.24.0
   script:
     - echo "Creating GitLab Release for $CI_COMMIT_TAG"
   release:
