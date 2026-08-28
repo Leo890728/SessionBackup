@@ -1,0 +1,71 @@
+# Auto-build the .vsix on every push / MR, and attach it to a GitLab Release on v* tags.
+# Prerequisites on the GitLab instance:
+#   - a runner that can run Docker images (executor: docker)
+#   - the runner can pull `node:20` and `registry.gitlab.com/gitlab-org/release-cli`
+#     (on an air-gapped instance, mirror those images and point `image:` at the mirror)
+
+stages:
+  - test
+  - package
+  - release
+
+default:
+  image: node:20
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - node_modules/
+
+workflow:
+  rules:
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+test:
+  stage: test
+  script:
+    - npm ci
+    - npm test
+
+package:
+  stage: package
+  script:
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        PKG_VERSION="$(node -p "require('./package.json').version")"
+        echo "package.json = $PKG_VERSION / tag = ${CI_COMMIT_TAG#v}"
+        if [ "v$PKG_VERSION" != "$CI_COMMIT_TAG" ]; then
+          echo "Tag $CI_COMMIT_TAG does not match package.json version $PKG_VERSION"
+          exit 1
+        fi
+      fi
+    - npm ci
+    - npm run package
+    - cp session-backup-*.vsix session-backup.vsix   # stable name for the release asset link
+  artifacts:
+    name: "vsix-$CI_COMMIT_REF_SLUG"
+    paths:
+      - session-backup-*.vsix
+    expire_in: 30 days
+
+release:
+  stage: release
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/
+  needs:
+    - job: package
+      artifacts: true
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  script:
+    - echo "Creating GitLab Release for $CI_COMMIT_TAG"
+  release:
+    tag_name: "$CI_COMMIT_TAG"
+    name: "$CI_COMMIT_TAG"
+    description: "Automated release for $CI_COMMIT_TAG"
+    assets:
+      links:
+        - name: "session-backup-$CI_COMMIT_TAG.vsix"
+          url: "$CI_PROJECT_URL/-/jobs/artifacts/$CI_COMMIT_TAG/raw/session-backup.vsix?job=package"

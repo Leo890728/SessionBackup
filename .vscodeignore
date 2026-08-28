@@ -1,6 +1,8 @@
 .vscode/**
 .claude/**
 .agents/**
+.github/**
+.gitlab-ci.yml
 src/**
 node_modules/**
 out/**/*.test.js
