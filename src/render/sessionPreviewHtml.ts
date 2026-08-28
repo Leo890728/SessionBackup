@@ -86,7 +86,7 @@ export function previewHtml(
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';${imageSource}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <style>${STYLE}</style>
+  <style>${SESSION_PREVIEW_STYLE}</style>
 </head>
 <body>
   <div class="page tool-${transcript.tool}">
@@ -239,6 +239,21 @@ export function previewHtml(
 }
 
 /**
+ * Reuses the preview conversation treatment inside other webviews, such as the
+ * branch-conflict comparison. The prefix keeps message anchors unique when two
+ * transcripts are rendered on the same page.
+ */
+export function sessionThreadHtml(
+  transcript: Transcript,
+  anchorPrefix = ""
+): string {
+  const avatar = `<div class="avatar avatar-mark" aria-hidden="true">${
+    transcript.tool === "claude" ? "✳" : "◇"
+  }</div>`;
+  return threadHtml(transcript.messages, avatar, "", 0, anchorPrefix);
+}
+
+/**
  * 訊息串，並把「新內容從這裡開始」的橫桿插在對的位置。
  *
  * 位置由產生訊息的那筆 JSONL 紀錄序號決定：第一則序號 >= 已備份長度的訊息之前。
@@ -249,7 +264,8 @@ function threadHtml(
   messages: TranscriptMessage[],
   avatar: string,
   divider: string,
-  backedUpRecords: number
+  backedUpRecords: number,
+  anchorPrefix = ""
 ): string {
   if (!messages.length) {
     return divider + '<p class="empty">這份對話沒有可顯示的訊息。</p>';
@@ -270,7 +286,9 @@ function threadHtml(
       messageHtml(
         message,
         avatar,
-        message.role === "user" ? questionAnchorId(questions++) : undefined
+        message.role === "user"
+          ? `${anchorPrefix}${questionAnchorId(questions++)}`
+          : undefined
       )
     );
   }
@@ -467,7 +485,7 @@ function formatTime(value: string | undefined): string | undefined {
  * 版面與配色模仿 Claude 的對話介面：暖白底、使用者訊息是靠右的圓角區塊、
  * 助理訊息不加外框直接排版。明暗色跟著 VS Code 主題切換（body 上的 vscode-* class）。
  */
-const STYLE = `
+export const SESSION_PREVIEW_STYLE = `
 :root {
   color-scheme: light dark;
   --bg: #faf9f5;

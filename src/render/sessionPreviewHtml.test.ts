@@ -1,7 +1,7 @@
 import * as assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { Transcript } from "../agents/types";
-import { formatDuration, previewHtml } from "./sessionPreviewHtml";
+import { formatDuration, previewHtml, sessionThreadHtml } from "./sessionPreviewHtml";
 
 describe("previewHtml", () => {
   const transcript = (messages: Transcript["messages"]): Transcript => ({
@@ -25,6 +25,21 @@ describe("previewHtml", () => {
     assert.ok(html.includes('<article class="turn assistant">'));
     assert.ok(html.includes("1 次提問"));
     assert.ok(html.includes("2 則訊息"));
+  });
+
+  it("reuses the conversation layout with unique conflict-side anchors", () => {
+    const value = transcript([
+      { role: "user", blocks: [{ kind: "text", text: "要保留哪一份？" }] },
+      { role: "assistant", blocks: [{ kind: "text", text: "比較內容" }] },
+    ]);
+    const remote = sessionThreadHtml(value, "remote-");
+    const local = sessionThreadHtml(value, "local-");
+
+    assert.ok(remote.includes('<article class="turn user" id="remote-q0">'));
+    assert.ok(local.includes('<article class="turn user" id="local-q0">'));
+    assert.ok(remote.includes('<div class="bubble">'));
+    assert.ok(remote.includes('<article class="turn assistant">'));
+    assert.equal(remote.includes('id="local-q0"'), false);
   });
 
   it("never emits raw markup from the conversation", () => {
