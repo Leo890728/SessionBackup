@@ -27,7 +27,15 @@ jobs:
       - run: npm test
 
       - name: Package VSIX
-        run: npm run package
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            LABEL="$GITHUB_REF_NAME"
+          else
+            LABEL="${GITHUB_REF_NAME//\//-}"
+          fi
+          VSIX="session-backup-${LABEL}.$(git rev-parse --short HEAD).vsix"
+          npm run package -- --out "$VSIX"
+          echo "built $VSIX"
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4

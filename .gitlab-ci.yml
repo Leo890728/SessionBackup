@@ -52,12 +52,14 @@ package:
         fi
       fi
     - npm ci
-    - npm run package
-    - cp session-backup-*.vsix session-backup.vsix   # stable name for the release asset link
+    - VSIX="session-backup-${CI_COMMIT_TAG:-$CI_COMMIT_REF_SLUG}.${CI_COMMIT_SHORT_SHA}.vsix"
+    - npm run package -- --out "$VSIX"
+    - cp "$VSIX" session-backup.vsix   # stable name for the release asset link
+    - echo "built $VSIX"
   artifacts:
     name: "vsix-$CI_COMMIT_REF_SLUG"
     paths:
-      - session-backup-*.vsix
+      - "*.vsix"
     expire_in: 30 days
 
 release:
@@ -76,5 +78,5 @@ release:
     description: "Automated release for $CI_COMMIT_TAG"
     assets:
       links:
-        - name: "session-backup-$CI_COMMIT_TAG.vsix"
+        - name: "session-backup-$CI_COMMIT_TAG.$CI_COMMIT_SHORT_SHA.vsix"
           url: "$CI_PROJECT_URL/-/jobs/artifacts/$CI_COMMIT_TAG/raw/session-backup.vsix?job=package"
