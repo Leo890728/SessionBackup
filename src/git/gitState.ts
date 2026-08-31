@@ -1,11 +1,11 @@
 export function selectFetchedRemoteBranch(
   refs: string[],
-  preferredBranch: string
+  preferredBranch: string | undefined
 ): string | undefined {
   const branches = refs
     .map((ref) => ref.trim().replace(/^origin\//, ""))
     .filter((ref) => ref && ref !== "HEAD");
-  if (branches.includes(preferredBranch)) {
+  if (preferredBranch && branches.includes(preferredBranch)) {
     return preferredBranch;
   }
   if (branches.includes("main")) {

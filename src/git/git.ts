@@ -2,8 +2,12 @@ import { spawn } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import * as vscode from "vscode";
 import { selectFetchedRemoteBranch } from "./gitState";
+
+/** vscode.OutputChannel 需要的最小子集：讓 git.ts 不必相依 vscode，才測得起來。 */
+export interface Logger {
+  appendLine(line: string): void;
+}
 
 export interface GitResult {
   code: number;
@@ -20,7 +24,7 @@ export interface CommitInfo {
 export class Git {
   constructor(
     readonly repoPath: string,
-    private out: vscode.OutputChannel
+    private out: Logger
   ) {}
 
   run(args: string[], allowFail = false): Promise<GitResult> {
@@ -122,9 +126,10 @@ export class Git {
     }
   }
 
-  async currentBranch(): Promise<string> {
-    const r = await this.run(["rev-parse", "--abbrev-ref", "HEAD"], true);
-    return r.stdout.trim() || "main";
+  /** 目前所在的分支名稱；HEAD 脫離（detached，例如 rebase 中斷後）時回傳 undefined。 */
+  async currentBranch(): Promise<string | undefined> {
+    const r = await this.run(["symbolic-ref", "--quiet", "--short", "HEAD"], true);
+    return r.code === 0 ? r.stdout.trim() || undefined : undefined;
   }
 
   async fetchOrigin(authHeader?: string): Promise<GitResult> {
@@ -133,7 +138,7 @@ export class Git {
   }
 
   async resolveRemoteBranch(
-    preferredBranch: string,
+    preferredBranch: string | undefined,
     authHeader?: string,
     refreshRemoteHead = true
   ): Promise<string | undefined> {
@@ -158,7 +163,7 @@ export class Git {
   /** push；失敗時嘗試先 pull --rebase（多機同步情境）再 push 一次。 */
   async pushWithRetry(authHeader?: string): Promise<void> {
     const extra = authHeader ? ["-c", "http.extraHeader=" + authHeader] : [];
-    const branch = await this.currentBranch();
+    const branch = (await this.currentBranch()) ?? "main";
     const first = await this.run([...extra, "push", "-u", "origin", branch], true);
     if (first.code === 0) {
       return;
@@ -182,7 +187,7 @@ export class Git {
       const message = (fetch.stderr || fetch.stdout).trim();
       throw new Error(message || "fetch 失敗");
     }
-    const branch = await this.resolveRemoteBranch(localBranch, authHeader);
+    const branch = await this.resolveRemoteBranch(localBranch ?? "main", authHeader);
     if (!branch) {
       return;
     }
@@ -195,7 +200,18 @@ export class Git {
       }
       return;
     }
-    if (localBranch !== branch) {
+    if (!localBranch) {
+      // HEAD 脫離：上一次同步的 rebase 被中斷（VSCode 關閉、當機）會留下未完成的
+      // rebase 狀態，之後每次備份都卡在「git branch -M」──不在任何分支上無法改名。
+      // 先收掉殘留的 rebase，再把目前 HEAD 接回目標分支，本機提交都還在。
+      await this.run(["rebase", "--abort"], true);
+      const reattach = await this.run(["checkout", "-B", branch], true);
+      if (reattach.code !== 0) {
+        throw new Error(
+          (reattach.stderr || reattach.stdout).trim() || "重新接回備份分支失敗"
+        );
+      }
+    } else if (localBranch !== branch) {
       await this.run(["branch", "-M", branch]);
     }
     // 先講清楚，否則使用者只會看到 rebase 在 manifest 上的衝突訊息，看不出真正的原因。
